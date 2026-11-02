@@ -12,7 +12,7 @@ class FormatSelectorTest {
     fun defaultFormat_containsBestSingleStream() {
         val format = MediaFormat(
             id = "b",
-            label = "Best Single Stream (-f b)",
+            label = "Best",
             note = "Fastest, single file without merging",
             isAudioOnly = false
         )
@@ -23,13 +23,28 @@ class FormatSelectorTest {
     @Test
     fun audioFormat_isCorrectlyFlagged() {
         val audioFormat = MediaFormat(
-            id = "bestaudio/best",
-            label = "Audio Only",
-            note = "Best available audio track (m4a/opus/aac)",
-            isAudioOnly = true
+            id = "bestaudio/m4a",
+            label = "M4A Audio (AAC)",
+            note = "Universal Android compatibility",
+            isAudioOnly = true,
+            audioCodec = "m4a"
         )
-        assertEquals("bestaudio/best", audioFormat.id)
+        assertEquals("bestaudio/m4a", audioFormat.id)
         assertTrue(audioFormat.isAudioOnly)
+        assertEquals("m4a", audioFormat.audioCodec)
+    }
+
+    @Test
+    fun flacAudioFormat_isConfigured() {
+        val flacFormat = MediaFormat(
+            id = "bestaudio/flac",
+            label = "FLAC Audio",
+            note = "Lossless CD quality",
+            isAudioOnly = true,
+            audioCodec = "flac"
+        )
+        assertTrue(flacFormat.isAudioOnly)
+        assertEquals("flac", flacFormat.audioCodec)
     }
 
     @Test

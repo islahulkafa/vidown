@@ -1,7 +1,17 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.chaquopy)
+}
+
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        load(FileInputStream(keystorePropertiesFile))
+    }
 }
 
 android {
@@ -15,7 +25,7 @@ android {
         minSdk = 24
         targetSdk = 37
         versionCode = 1
-        versionName = "1.0"
+        versionName = "0.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -24,11 +34,25 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            if (keystorePropertiesFile.exists()) {
+                val storeFilePath = keystoreProperties.getProperty("storeFile") ?: "release.jks"
+                storeFile = rootProject.file(storeFilePath)
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+        }
         release {
-            optimization {
-                enable = true
-                packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
             }
         }
     }
@@ -40,6 +64,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {
@@ -52,7 +77,10 @@ android {
 chaquopy {
     defaultConfig {
         version = "3.14"
-        buildPython("C:/Users/leugard/AppData/Local/Programs/Python/Python314/python.exe")
+        val localWinPython = File("C:/Users/leugard/AppData/Local/Programs/Python/Python314/python.exe")
+        if (localWinPython.exists()) {
+            buildPython(localWinPython.absolutePath)
+        }
         pip {
             install("yt-dlp")
             install("yt-dlp-ejs")
@@ -81,6 +109,8 @@ dependencies {
     implementation(libs.compose.material3.adaptive.navigation.suite)
     implementation(libs.compose.material.icons.extended)
     implementation(libs.phosphor.icon)
+    implementation(libs.coil.compose)
+    implementation(libs.coil.video)
 
     implementation(libs.kotlinx.coroutines.android)
 

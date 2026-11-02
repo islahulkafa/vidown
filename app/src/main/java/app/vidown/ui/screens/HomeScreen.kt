@@ -26,6 +26,7 @@ import com.adamglin.phosphoricons.regular.ClipboardText
 import com.adamglin.phosphoricons.regular.DownloadSimple
 import com.adamglin.phosphoricons.regular.MagnifyingGlass
 import com.adamglin.phosphoricons.regular.MusicNote
+import com.adamglin.phosphoricons.regular.Subtitles
 import com.adamglin.phosphoricons.regular.Video
 import com.adamglin.phosphoricons.regular.X
 import androidx.compose.material3.Button
@@ -37,11 +38,11 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -60,6 +61,7 @@ import app.vidown.python.ProbeResult
 import app.vidown.ui.HomeUiState
 import app.vidown.ui.MainViewModel
 import app.vidown.ui.ProbeUiState
+import app.vidown.ui.components.MediaThumbnail
 
 @Composable
 fun HomeRoute(
@@ -84,6 +86,7 @@ fun HomeRoute(
             }
         },
         onFormatSelected = viewModel::selectFormat,
+        onEmbedSubtitlesToggled = viewModel::toggleEmbedSubtitles,
         onDownloadClicked = {
             viewModel.startDownload(onEnqueued = onNavigateToQueue)
         },
@@ -99,6 +102,7 @@ fun HomeScreen(
     onProbeClicked: () -> Unit,
     onPasteClicked: () -> Unit,
     onFormatSelected: (MediaFormat) -> Unit,
+    onEmbedSubtitlesToggled: (Boolean) -> Unit = {},
     onDownloadClicked: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -144,42 +148,32 @@ fun HomeScreen(
                                 IconButton(onClick = { onUrlChanged("") }) {
                                     Icon(PhosphorIcons.Regular.X, contentDescription = "Clear URL")
                                 }
+                            } else {
+                                IconButton(onClick = onPasteClicked) {
+                                    Icon(PhosphorIcons.Regular.ClipboardText, contentDescription = "Paste URL")
+                                }
                             }
                         }
                     )
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    Button(
+                        onClick = onProbeClicked,
+                        enabled = uiState.urlInput.isNotBlank() && uiState.probeState !is ProbeUiState.Loading,
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        OutlinedButton(
-                            onClick = onPasteClicked,
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(PhosphorIcons.Regular.ClipboardText, contentDescription = null)
+                        if (uiState.probeState is ProbeUiState.Loading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                            )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Paste")
-                        }
-
-                        Button(
-                            onClick = onProbeClicked,
-                            enabled = uiState.urlInput.isNotBlank() && uiState.probeState !is ProbeUiState.Loading,
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            if (uiState.probeState is ProbeUiState.Loading) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    strokeWidth = 2.dp,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Analyzing...", color = MaterialTheme.colorScheme.onSurface)
-                            } else {
-                                Icon(PhosphorIcons.Regular.MagnifyingGlass, contentDescription = null)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Analyze")
-                            }
+                            Text("Analyzing...", color = MaterialTheme.colorScheme.onSurface)
+                        } else {
+                            Icon(PhosphorIcons.Regular.MagnifyingGlass, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Analyze")
                         }
                     }
                 }
@@ -253,6 +247,49 @@ fun HomeScreen(
                     }
                 }
 
+                if (probe.hasSubtitles && uiState.selectedFormat?.isAudioOnly == false) {
+                    item(key = "subtitles_option") {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainer
+                            ),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = PhosphorIcons.Regular.Subtitles,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.width(16.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Subtitles",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Embed subtitles into video",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = uiState.embedSubtitles,
+                                    onCheckedChange = onEmbedSubtitlesToggled
+                                )
+                            }
+                        }
+                    }
+                }
+
                 item(key = "download_action") {
                     Button(
                         onClick = onDownloadClicked,
@@ -289,20 +326,12 @@ private fun MediaHeaderCard(probe: ProbeResult) {
             modifier = Modifier.padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Surface(
-                modifier = Modifier.size(64.dp),
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = PhosphorIcons.Regular.Video,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(32.dp)
-                    )
-                }
-            }
+            MediaThumbnail(
+                thumbnailUrl = probe.thumbnailUrl,
+                durationSeconds = probe.durationSeconds,
+                modifier = Modifier.size(width = 84.dp, height = 56.dp),
+                shape = RoundedCornerShape(10.dp)
+            )
 
             Spacer(modifier = Modifier.width(16.dp))
 
@@ -319,16 +348,6 @@ private fun MediaHeaderCard(probe: ProbeResult) {
                         text = probe.uploader,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                if (probe.durationSeconds > 0) {
-                    val min = probe.durationSeconds / 60
-                    val sec = probe.durationSeconds % 60
-                    Text(
-                        text = String.format("%02d:%02d", min, sec),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontWeight = FontWeight.Medium
                     )
                 }
             }

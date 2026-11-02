@@ -12,6 +12,7 @@ espressoCore = "3.6.1"
 room = "2.6.1"
 kotlinxCoroutines = "1.9.0"
 phosphorIcon = "1.0.0"
+coil = "2.7.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -29,6 +30,8 @@ compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 compose-material3-adaptive-navigation-suite = { group = "androidx.compose.material3", name = "material3-adaptive-navigation-suite" }
 compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
 phosphor-icon = { group = "com.adamglin", name = "phosphor-icon", version.ref = "phosphorIcon" }
+coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
+coil-video = { group = "io.coil-kt", name = "coil-video", version.ref = "coil" }
 
 room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
 room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }

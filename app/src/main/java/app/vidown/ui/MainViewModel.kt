@@ -29,6 +29,8 @@ data class HomeUiState(
     val urlInput: String = "",
     val probeState: ProbeUiState = ProbeUiState.Idle,
     val selectedFormat: MediaFormat? = null,
+    val embedSubtitles: Boolean = false,
+    val selectedSubtitleLang: String = "en",
     val isStartingDownload: Boolean = false
 )
 
@@ -112,6 +114,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _homeState.value = _homeState.value.copy(selectedFormat = format)
     }
 
+    fun toggleEmbedSubtitles(enabled: Boolean) {
+        _homeState.value = _homeState.value.copy(embedSubtitles = enabled)
+    }
+
+    fun selectSubtitleLang(lang: String) {
+        _homeState.value = _homeState.value.copy(selectedSubtitleLang = lang)
+    }
+
     fun startDownload(onEnqueued: () -> Unit) {
         val currentState = _homeState.value
         val probe = (currentState.probeState as? ProbeUiState.Success)?.probe ?: return
@@ -129,6 +139,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 formatId = format.id,
                 formatLabel = format.label,
                 isAudioOnly = format.isAudioOnly,
+                audioCodec = format.audioCodec,
+                embedSubtitles = if (!format.isAudioOnly) currentState.embedSubtitles else false,
+                subtitleLang = if (!format.isAudioOnly && currentState.embedSubtitles) currentState.selectedSubtitleLang else null,
                 status = DownloadStatus.QUEUED
             )
 

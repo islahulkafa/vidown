@@ -20,12 +20,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
-import com.adamglin.phosphoricons.regular.CheckCircle
 import com.adamglin.phosphoricons.regular.ClockCounterClockwise
 import com.adamglin.phosphoricons.regular.Play
 import com.adamglin.phosphoricons.regular.ShareNetwork
 import com.adamglin.phosphoricons.regular.Trash
-import com.adamglin.phosphoricons.regular.WarningCircle
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -52,6 +50,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.vidown.data.model.DownloadStatus
 import app.vidown.data.model.DownloadTask
 import app.vidown.ui.MainViewModel
+import app.vidown.ui.components.MediaThumbnail
 
 @Composable
 fun HistoryRoute(
@@ -175,14 +174,14 @@ private fun HistoryTaskCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 val isSuccess = task.status == DownloadStatus.COMPLETED
-                val icon = if (isSuccess) PhosphorIcons.Regular.CheckCircle else PhosphorIcons.Regular.WarningCircle
-                val iconTint = if (isSuccess) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
 
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = iconTint,
-                    modifier = Modifier.size(24.dp)
+                MediaThumbnail(
+                    thumbnailUrl = task.thumbnailUrl,
+                    mediaUri = task.mediaStoreUri ?: task.localFilePath,
+                    isAudioOnly = task.isAudioOnly,
+                    durationSeconds = task.durationSeconds,
+                    modifier = Modifier.size(width = 72.dp, height = 48.dp),
+                    shape = RoundedCornerShape(8.dp)
                 )
 
                 Spacer(modifier = Modifier.width(12.dp))

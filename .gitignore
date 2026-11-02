@@ -23,6 +23,7 @@ __pycache__/
 *.jks
 *.keystore
 secrets.properties
+keystore.properties
 
 # Native Build Scratch
 tools/native/*_build/

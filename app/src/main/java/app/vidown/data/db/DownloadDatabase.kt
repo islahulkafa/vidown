@@ -22,6 +22,9 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
                 $COL_FORMAT_ID TEXT,
                 $COL_FORMAT_LABEL TEXT,
                 $COL_IS_AUDIO_ONLY INTEGER,
+                $COL_AUDIO_CODEC TEXT,
+                $COL_EMBED_SUBTITLES INTEGER DEFAULT 0,
+                $COL_SUBTITLE_LANG TEXT,
                 $COL_STATUS TEXT NOT NULL,
                 $COL_PROGRESS_PERCENT REAL,
                 $COL_SPEED_BYTES REAL,
@@ -38,8 +41,16 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        db.execSQL("DROP TABLE IF EXISTS $TABLE_DOWNLOADS")
-        onCreate(db)
+        if (oldVersion < 2) {
+            try {
+                db.execSQL("ALTER TABLE $TABLE_DOWNLOADS ADD COLUMN $COL_AUDIO_CODEC TEXT")
+                db.execSQL("ALTER TABLE $TABLE_DOWNLOADS ADD COLUMN $COL_EMBED_SUBTITLES INTEGER DEFAULT 0")
+                db.execSQL("ALTER TABLE $TABLE_DOWNLOADS ADD COLUMN $COL_SUBTITLE_LANG TEXT")
+            } catch (e: Exception) {
+                db.execSQL("DROP TABLE IF EXISTS $TABLE_DOWNLOADS")
+                onCreate(db)
+            }
+        }
     }
 
     fun getAllTasks(): List<DownloadTask> {
@@ -56,6 +67,15 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
         )
         cursor.use { c ->
             while (c.moveToNext()) {
+                val audioCodecCol = c.getColumnIndex(COL_AUDIO_CODEC)
+                val audioCodec = if (audioCodecCol >= 0 && !c.isNull(audioCodecCol)) c.getString(audioCodecCol) else null
+
+                val embedSubCol = c.getColumnIndex(COL_EMBED_SUBTITLES)
+                val embedSubtitles = if (embedSubCol >= 0) c.getInt(embedSubCol) == 1 else false
+
+                val subLangCol = c.getColumnIndex(COL_SUBTITLE_LANG)
+                val subtitleLang = if (subLangCol >= 0 && !c.isNull(subLangCol)) c.getString(subLangCol) else null
+
                 list.add(
                     DownloadTask(
                         id = c.getString(c.getColumnIndexOrThrow(COL_ID)),
@@ -65,8 +85,11 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
                         uploader = c.getString(c.getColumnIndexOrThrow(COL_UPLOADER)) ?: "",
                         durationSeconds = c.getLong(c.getColumnIndexOrThrow(COL_DURATION_SECONDS)),
                         formatId = c.getString(c.getColumnIndexOrThrow(COL_FORMAT_ID)) ?: "b",
-                        formatLabel = c.getString(c.getColumnIndexOrThrow(COL_FORMAT_LABEL)) ?: "Best (-f b)",
+                        formatLabel = c.getString(c.getColumnIndexOrThrow(COL_FORMAT_LABEL)) ?: "Best",
                         isAudioOnly = c.getInt(c.getColumnIndexOrThrow(COL_IS_AUDIO_ONLY)) == 1,
+                        audioCodec = audioCodec,
+                        embedSubtitles = embedSubtitles,
+                        subtitleLang = subtitleLang,
                         status = DownloadStatus.valueOf(c.getString(c.getColumnIndexOrThrow(COL_STATUS))),
                         progressPercent = c.getFloat(c.getColumnIndexOrThrow(COL_PROGRESS_PERCENT)),
                         speedBytesPerSec = c.getDouble(c.getColumnIndexOrThrow(COL_SPEED_BYTES)),
@@ -96,6 +119,9 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
             put(COL_FORMAT_ID, task.formatId)
             put(COL_FORMAT_LABEL, task.formatLabel)
             put(COL_IS_AUDIO_ONLY, if (task.isAudioOnly) 1 else 0)
+            put(COL_AUDIO_CODEC, task.audioCodec)
+            put(COL_EMBED_SUBTITLES, if (task.embedSubtitles) 1 else 0)
+            put(COL_SUBTITLE_LANG, task.subtitleLang)
             put(COL_STATUS, task.status.name)
             put(COL_PROGRESS_PERCENT, task.progressPercent)
             put(COL_SPEED_BYTES, task.speedBytesPerSec)
@@ -116,7 +142,7 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
 
     companion object {
         const val DATABASE_NAME = "vidown.db"
-        const val DATABASE_VERSION = 1
+        const val DATABASE_VERSION = 2
 
         const val TABLE_DOWNLOADS = "downloads"
         const val COL_ID = "id"
@@ -128,6 +154,9 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
         const val COL_FORMAT_ID = "format_id"
         const val COL_FORMAT_LABEL = "format_label"
         const val COL_IS_AUDIO_ONLY = "is_audio_only"
+        const val COL_AUDIO_CODEC = "audio_codec"
+        const val COL_EMBED_SUBTITLES = "embed_subtitles"
+        const val COL_SUBTITLE_LANG = "subtitle_lang"
         const val COL_STATUS = "status"
         const val COL_PROGRESS_PERCENT = "progress_percent"
         const val COL_SPEED_BYTES = "speed_bytes"

@@ -48,6 +48,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.vidown.BuildConfig
 import app.vidown.ui.MainViewModel
 
 enum class SettingsSubSection {
@@ -171,7 +172,7 @@ fun SettingsMainScreen(
                         SettingsRow(
                             icon = PhosphorIcons.Regular.Info,
                             title = "About",
-                            subtitle = "Version 1.0",
+                            subtitle = "Version ${BuildConfig.VERSION_NAME}",
                             onClick = { onNavigateToSection(SettingsSubSection.ABOUT) }
                         )
                     }
@@ -450,7 +451,7 @@ fun AboutSettingsScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Version 1.0",
+                            text = "Version ${BuildConfig.VERSION_NAME}",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

@@ -20,14 +20,17 @@ data class ProbeResult(
     val thumbnailUrl: String,
     val uploader: String,
     val webpageUrl: String,
-    val formats: List<MediaFormat>
+    val formats: List<MediaFormat>,
+    val hasSubtitles: Boolean = false,
+    val availableSubtitles: List<String> = emptyList()
 )
 
 data class MediaFormat(
     val id: String,
     val label: String,
     val note: String,
-    val isAudioOnly: Boolean
+    val isAudioOnly: Boolean,
+    val audioCodec: String? = null
 )
 
 data class DownloadResult(
@@ -86,15 +89,26 @@ class PythonBridge private constructor(private val appContext: Context) {
             val formats = mutableListOf<MediaFormat>()
             for (i in 0 until formatsJson.length()) {
                 val f = formatsJson.getJSONObject(i)
+                val audioCodecStr = if (!f.isNull("audio_codec")) f.optString("audio_codec").ifEmpty { null } else null
                 formats.add(
                     MediaFormat(
                         id = f.getString("id"),
                         label = f.getString("label"),
                         note = f.optString("note", ""),
-                        isAudioOnly = f.optBoolean("is_audio_only", false)
+                        isAudioOnly = f.optBoolean("is_audio_only", false),
+                        audioCodec = audioCodecStr
                     )
                 )
             }
+
+            val subLangsJson = data.optJSONArray("available_subtitles")
+            val subLangs = mutableListOf<String>()
+            if (subLangsJson != null) {
+                for (j in 0 until subLangsJson.length()) {
+                    subLangs.add(subLangsJson.getString(j))
+                }
+            }
+            val hasSubtitles = data.optBoolean("has_subtitles", false)
 
             val probe = ProbeResult(
                 id = data.optString("id", ""),
@@ -103,7 +117,9 @@ class PythonBridge private constructor(private val appContext: Context) {
                 thumbnailUrl = data.optString("thumbnail", ""),
                 uploader = data.optString("uploader", ""),
                 webpageUrl = data.optString("webpage_url", url),
-                formats = formats
+                formats = formats,
+                hasSubtitles = hasSubtitles,
+                availableSubtitles = subLangs
             )
             Result.success(probe)
         } catch (e: Exception) {
@@ -116,7 +132,10 @@ class PythonBridge private constructor(private val appContext: Context) {
         url: String,
         formatId: String,
         outputDir: File,
-        callback: ProgressCallback?
+        callback: ProgressCallback?,
+        audioCodec: String? = null,
+        embedSubtitles: Boolean = false,
+        subtitleLang: String? = null
     ): DownloadResult = withContext(Dispatchers.IO) {
         try {
             val pyCallback: Any? = callback?.let { cb ->
@@ -134,7 +153,10 @@ class PythonBridge private constructor(private val appContext: Context) {
                 url,
                 formatId,
                 outputDir.absolutePath,
-                pyCallback
+                pyCallback,
+                audioCodec,
+                embedSubtitles,
+                subtitleLang
             ).toString()
 
             val json = JSONObject(jsonStr)

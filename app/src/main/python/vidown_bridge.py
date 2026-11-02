@@ -71,18 +71,18 @@ def probe_info(url):
             uploader = info.get("uploader", "")
             webpage_url = info.get("webpage_url", url)
 
+            subtitles = info.get("subtitles") or {}
+            auto_captions = info.get("automatic_captions") or {}
+            all_sub_langs = sorted(list(set(list(subtitles.keys()) + list(auto_captions.keys()))))
+            has_subtitles = len(all_sub_langs) > 0
+
             formats = []
             formats.append({
                 "id": "b",
-                "label": "Best Single Stream (-f b)",
+                "label": "Best",
                 "note": "Fastest, single file without merging",
-                "is_audio_only": False
-            })
-            formats.append({
-                "id": "bestvideo+bestaudio/best",
-                "label": "Best Quality Available",
-                "note": "Highest resolution video + audio multiplexed",
-                "is_audio_only": False
+                "is_audio_only": False,
+                "audio_codec": None
             })
 
             seen_heights = set()
@@ -96,14 +96,37 @@ def probe_info(url):
                         "id": f"bestvideo[height<={height}]+bestaudio/best[height<={height}]",
                         "label": f"{height}p Video",
                         "note": f"Resolution up to {height}p with audio",
-                        "is_audio_only": False
+                        "is_audio_only": False,
+                        "audio_codec": None
                     })
 
             formats.append({
+                "id": "bestaudio/m4a",
+                "label": "M4A Audio (AAC)",
+                "note": "Universal Android compatibility",
+                "is_audio_only": True,
+                "audio_codec": "m4a"
+            })
+            formats.append({
+                "id": "bestaudio/opus",
+                "label": "OPUS Audio",
+                "note": "High efficiency stream",
+                "is_audio_only": True,
+                "audio_codec": "opus"
+            })
+            formats.append({
+                "id": "bestaudio/flac",
+                "label": "FLAC Audio",
+                "note": "Lossless CD quality",
+                "is_audio_only": True,
+                "audio_codec": "flac"
+            })
+            formats.append({
                 "id": "bestaudio/best",
-                "label": "Audio Only",
-                "note": "Best available audio track (m4a/opus/aac)",
-                "is_audio_only": True
+                "label": "Native Audio",
+                "note": "Extracted without re-encoding",
+                "is_audio_only": True,
+                "audio_codec": None
             })
 
             data = {
@@ -113,7 +136,9 @@ def probe_info(url):
                 "thumbnail": thumbnail,
                 "uploader": uploader,
                 "webpage_url": webpage_url,
-                "formats": formats
+                "formats": formats,
+                "has_subtitles": has_subtitles,
+                "available_subtitles": all_sub_langs
             }
             return json.dumps({"status": "ok", "data": data})
 
@@ -124,7 +149,7 @@ def probe_info(url):
             "traceback": traceback.format_exc()
         })
 
-def download_media(task_id, url, format_id, out_dir, callback_obj):
+def download_media(task_id, url, format_id, out_dir, callback_obj, audio_codec=None, embed_subtitles=False, subtitle_lang=None):
     task_id_str = str(task_id)
     if task_id_str in _CANCELLED_TASKS:
         _CANCELLED_TASKS.remove(task_id_str)
@@ -154,12 +179,22 @@ def download_media(task_id, url, format_id, out_dir, callback_obj):
                         pass
 
             elif status == "finished":
-                downloaded_filepath = d.get("filename")
+                fp = d.get("filename")
+                if fp and not fp.endswith(".temp") and not fp.endswith(".part"):
+                    downloaded_filepath = fp
                 if callback_obj:
                     try:
                         callback_obj.onProgress(task_id_str, 100.0, 0.0, 0, "processing")
                     except Exception:
                         pass
+
+        def postprocessor_hook(d):
+            nonlocal downloaded_filepath
+            if d.get("status") == "finished":
+                info = d.get("info_dict", {})
+                fp = info.get("filepath") or d.get("filepath")
+                if fp and os.path.exists(fp):
+                    downloaded_filepath = fp
 
         os.makedirs(out_dir, exist_ok=True)
         outtmpl = os.path.join(out_dir, "%(title).100B [%(id)s].%(ext)s")
@@ -168,13 +203,53 @@ def download_media(task_id, url, format_id, out_dir, callback_obj):
             "format": format_id or "b",
             "outtmpl": outtmpl,
             "progress_hooks": [progress_hook],
+            "postprocessor_hooks": [postprocessor_hook],
             "quiet": True,
             "no_warnings": True,
             "noplaylist": True,
         }
 
-        if _CONFIG.get("ffmpeg_path") and os.path.exists(_CONFIG["ffmpeg_path"]):
+        has_ffmpeg = bool(_CONFIG.get("ffmpeg_path") and os.path.exists(_CONFIG["ffmpeg_path"]))
+        if has_ffmpeg:
             ydl_opts["ffmpeg_location"] = _CONFIG["ffmpeg_path"]
+
+            postprocessors = []
+
+            if audio_codec:
+                postprocessors.append({
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": audio_codec,
+                    "preferredquality": "0",
+                })
+
+            if embed_subtitles:
+                ydl_opts["writesubtitles"] = True
+                ydl_opts["writeautomaticsub"] = True
+                if subtitle_lang:
+                    ydl_opts["subtitleslangs"] = [subtitle_lang]
+                else:
+                    ydl_opts["subtitleslangs"] = ["en"]
+                postprocessors.append({
+                    "key": "FFmpegEmbedSubtitle",
+                    "already_have_subtitle": False,
+                })
+                ydl_opts["merge_output_format"] = "mp4"
+
+            ydl_opts["writethumbnail"] = True
+            postprocessors.append({
+                "key": "FFmpegThumbnailsConvertor",
+                "format": "jpg",
+            })
+            postprocessors.append({
+                "key": "FFmpegMetadata",
+                "add_metadata": True,
+            })
+            postprocessors.append({
+                "key": "EmbedThumbnail",
+                "already_have_thumbnail": False,
+            })
+
+            ydl_opts["postprocessors"] = postprocessors
 
         if _CONFIG.get("qjs_path") and os.path.exists(_CONFIG["qjs_path"]):
             ydl_opts["js_runtimes"] = {
@@ -187,7 +262,17 @@ def download_media(task_id, url, format_id, out_dir, callback_obj):
                 return json.dumps({"status": "error", "error": f"yt-dlp exited with code {ret_code}"})
 
         if not downloaded_filepath or not os.path.exists(downloaded_filepath):
-            files = [os.path.join(out_dir, f) for f in os.listdir(out_dir) if not f.endswith(".part") and not f.endswith(".ytdl")]
+            files = [
+                os.path.join(out_dir, f) for f in os.listdir(out_dir)
+                if not f.endswith(".part")
+                and not f.endswith(".ytdl")
+                and not f.endswith(".temp")
+                and not f.endswith(".webp")
+                and not f.endswith(".jpg")
+                and not f.endswith(".png")
+                and not f.endswith(".vtt")
+                and not f.endswith(".srt")
+            ]
             if files:
                 downloaded_filepath = max(files, key=os.path.getmtime)
 

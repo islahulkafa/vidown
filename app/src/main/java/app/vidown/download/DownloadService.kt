@@ -140,7 +140,10 @@ class DownloadService : Service() {
                     url = task.url,
                     formatId = task.formatId,
                     outputDir = tempDir,
-                    callback = callback
+                    callback = callback,
+                    audioCodec = task.audioCodec,
+                    embedSubtitles = task.embedSubtitles,
+                    subtitleLang = task.subtitleLang
                 )
 
                 if (result.isSuccess && result.filePath != null) {

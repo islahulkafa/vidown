@@ -44,6 +44,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.vidown.data.model.DownloadStatus
 import app.vidown.data.model.DownloadTask
 import app.vidown.ui.MainViewModel
+import app.vidown.ui.components.MediaThumbnail
 
 @Composable
 fun QueueRoute(
@@ -153,20 +154,14 @@ private fun ActiveTaskCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Surface(
-                    modifier = Modifier.size(40.dp),
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = PhosphorIcons.Regular.DownloadSimple,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                }
+                MediaThumbnail(
+                    thumbnailUrl = task.thumbnailUrl,
+                    mediaUri = task.localFilePath,
+                    isAudioOnly = task.isAudioOnly,
+                    durationSeconds = task.durationSeconds,
+                    modifier = Modifier.size(width = 72.dp, height = 48.dp),
+                    shape = RoundedCornerShape(8.dp)
+                )
 
                 Spacer(modifier = Modifier.width(12.dp))
 
