@@ -24,12 +24,15 @@ import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
 import com.adamglin.phosphoricons.regular.ClipboardText
 import com.adamglin.phosphoricons.regular.DownloadSimple
+import com.adamglin.phosphoricons.regular.Key
 import com.adamglin.phosphoricons.regular.MagnifyingGlass
 import com.adamglin.phosphoricons.regular.MusicNote
+import com.adamglin.phosphoricons.regular.Playlist
 import com.adamglin.phosphoricons.regular.Subtitles
 import com.adamglin.phosphoricons.regular.Video
 import com.adamglin.phosphoricons.regular.X
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -56,17 +59,21 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.vidown.python.BatchPreset
 import app.vidown.python.MediaFormat
+import app.vidown.python.PlaylistProbeResult
 import app.vidown.python.ProbeResult
 import app.vidown.ui.HomeUiState
 import app.vidown.ui.MainViewModel
 import app.vidown.ui.ProbeUiState
 import app.vidown.ui.components.MediaThumbnail
+import app.vidown.ui.components.PlaylistSelectionSheet
 
 @Composable
 fun HomeRoute(
     viewModel: MainViewModel,
     onNavigateToQueue: () -> Unit,
+    onNavigateToSettings: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.homeState.collectAsStateWithLifecycle()
@@ -90,6 +97,17 @@ fun HomeRoute(
         onDownloadClicked = {
             viewModel.startDownload(onEnqueued = onNavigateToQueue)
         },
+        onOpenPlaylistSheet = viewModel::openPlaylistSheet,
+        onDismissPlaylistSheet = viewModel::dismissPlaylistSheet,
+        onTogglePlaylistItem = viewModel::togglePlaylistItem,
+        onSelectAllPlaylistItems = viewModel::selectAllPlaylistItems,
+        onDeselectAllPlaylistItems = viewModel::deselectAllPlaylistItems,
+        onSelectBatchPreset = viewModel::selectBatchPreset,
+        onToggleBatchSubtitles = viewModel::toggleBatchSubtitles,
+        onBatchDownloadClicked = {
+            viewModel.startBatchDownload(onEnqueued = onNavigateToQueue)
+        },
+        onConfigureCookiesClicked = onNavigateToSettings,
         modifier = modifier
     )
 }
@@ -104,6 +122,15 @@ fun HomeScreen(
     onFormatSelected: (MediaFormat) -> Unit,
     onEmbedSubtitlesToggled: (Boolean) -> Unit = {},
     onDownloadClicked: () -> Unit,
+    onOpenPlaylistSheet: () -> Unit = {},
+    onDismissPlaylistSheet: () -> Unit = {},
+    onTogglePlaylistItem: (String) -> Unit = {},
+    onSelectAllPlaylistItems: () -> Unit = {},
+    onDeselectAllPlaylistItems: () -> Unit = {},
+    onSelectBatchPreset: (BatchPreset) -> Unit = {},
+    onToggleBatchSubtitles: (Boolean) -> Unit = {},
+    onBatchDownloadClicked: () -> Unit = {},
+    onConfigureCookiesClicked: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Scaffold(
@@ -180,6 +207,7 @@ fun HomeScreen(
             }
 
             if (uiState.probeState is ProbeUiState.Error) {
+                val errorState = uiState.probeState
                 item(key = "probe_error") {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -190,19 +218,49 @@ fun HomeScreen(
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Text(
-                                text = "Error",
+                                text = if (errorState.isAuthError) "Authentication Required" else "Error",
                                 style = MaterialTheme.typography.titleSmall,
                                 color = MaterialTheme.colorScheme.onErrorContainer,
                                 fontWeight = FontWeight.Bold
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = uiState.probeState.message,
+                                text = errorState.message,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onErrorContainer
                             )
+                            if (errorState.isAuthError) {
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Button(
+                                    onClick = onConfigureCookiesClicked,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.onErrorContainer,
+                                        contentColor = MaterialTheme.colorScheme.errorContainer
+                                    ),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = PhosphorIcons.Regular.Key,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Configure Cookies in Settings")
+                                }
+                            }
                         }
                     }
+                }
+            }
+
+            if (uiState.probeState is ProbeUiState.Playlist) {
+                val playlist = uiState.probeState.playlist
+                item(key = "probe_playlist_header") {
+                    PlaylistHeaderCard(
+                        playlist = playlist,
+                        selectedCount = uiState.selectedPlaylistItems.size,
+                        onOpenSheet = onOpenPlaylistSheet
+                    )
                 }
             }
 
@@ -308,6 +366,93 @@ fun HomeScreen(
                         )
                     }
                 }
+            }
+        }
+    }
+
+    if (uiState.isPlaylistSheetOpen && uiState.probeState is ProbeUiState.Playlist) {
+        PlaylistSelectionSheet(
+            playlist = uiState.probeState.playlist,
+            selectedItemIds = uiState.selectedPlaylistItems,
+            selectedBatchPreset = uiState.selectedBatchPreset,
+            embedSubtitles = uiState.embedBatchSubtitles,
+            onDismiss = onDismissPlaylistSheet,
+            onToggleItem = onTogglePlaylistItem,
+            onSelectAll = onSelectAllPlaylistItems,
+            onDeselectAll = onDeselectAllPlaylistItems,
+            onSelectPreset = onSelectBatchPreset,
+            onToggleSubtitles = onToggleBatchSubtitles,
+            onDownloadClicked = onBatchDownloadClicked
+        )
+    }
+}
+
+@Composable
+private fun PlaylistHeaderCard(
+    playlist: PlaylistProbeResult,
+    selectedCount: Int,
+    onOpenSheet: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer
+        ),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = PhosphorIcons.Regular.Playlist,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = playlist.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = if (playlist.uploader.isNotBlank()) "${playlist.uploader} • ${playlist.entries.size} items" else "${playlist.entries.size} items",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Button(
+                onClick = onOpenSheet,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(PhosphorIcons.Regular.Playlist, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Configure & Download ($selectedCount selected)",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
             }
         }
     }

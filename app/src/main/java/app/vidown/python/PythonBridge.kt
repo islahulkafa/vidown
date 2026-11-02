@@ -1,6 +1,7 @@
 package app.vidown.python
 
 import android.content.Context
+import app.vidown.data.preferences.AppPreferences
 import com.chaquo.python.PyObject
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
@@ -23,6 +24,91 @@ data class ProbeResult(
     val formats: List<MediaFormat>,
     val hasSubtitles: Boolean = false,
     val availableSubtitles: List<String> = emptyList()
+)
+
+data class PlaylistEntry(
+    val id: String,
+    val title: String,
+    val durationSeconds: Long,
+    val thumbnailUrl: String,
+    val uploader: String,
+    val url: String
+)
+
+data class PlaylistProbeResult(
+    val id: String,
+    val title: String,
+    val uploader: String,
+    val itemCount: Int,
+    val entries: List<PlaylistEntry>
+)
+
+sealed interface ProbeData {
+    data class Single(val probe: ProbeResult) : ProbeData
+    data class Playlist(val playlist: PlaylistProbeResult) : ProbeData
+}
+
+data class BatchPreset(
+    val id: String,
+    val label: String,
+    val note: String,
+    val isAudioOnly: Boolean,
+    val audioCodec: String? = null
+)
+
+val DEFAULT_BATCH_PRESETS = listOf(
+    BatchPreset(
+        id = "b",
+        label = "Best Video",
+        note = "Fastest single file stream",
+        isAudioOnly = false
+    ),
+    BatchPreset(
+        id = "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+        label = "1080p Video",
+        note = "Full HD resolution",
+        isAudioOnly = false
+    ),
+    BatchPreset(
+        id = "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+        label = "720p Video",
+        note = "Standard HD resolution",
+        isAudioOnly = false
+    ),
+    BatchPreset(
+        id = "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
+        label = "480p Video",
+        note = "Compact resolution",
+        isAudioOnly = false
+    ),
+    BatchPreset(
+        id = "bestaudio/m4a/bestaudio/best",
+        label = "M4A Audio",
+        note = "Universal AAC format",
+        isAudioOnly = true,
+        audioCodec = "m4a"
+    ),
+    BatchPreset(
+        id = "bestaudio/opus/bestaudio/best",
+        label = "OPUS Audio",
+        note = "High quality low bitrate",
+        isAudioOnly = true,
+        audioCodec = "opus"
+    ),
+    BatchPreset(
+        id = "bestaudio/flac/bestaudio/best",
+        label = "FLAC Audio",
+        note = "Lossless audio quality",
+        isAudioOnly = true,
+        audioCodec = "flac"
+    ),
+    BatchPreset(
+        id = "bestaudio/best",
+        label = "Native Audio",
+        note = "Extracted without re-encoding",
+        isAudioOnly = true,
+        audioCodec = null
+    )
 )
 
 data class MediaFormat(
@@ -67,14 +153,26 @@ class PythonBridge private constructor(private val appContext: Context) {
         val cacheDir = File(appContext.cacheDir, "downloads").apply { mkdirs() }.absolutePath
         val updateDir = File(appContext.filesDir, "ytdlp_update").apply { mkdirs() }.absolutePath
 
-        bridgeModule.callAttr("configure", ffmpegPath, qjsPath, cacheDir, updateDir)
+        val cookieFile = File(appContext.filesDir, "cookies/cookies.txt")
+        val prefs = AppPreferences.getInstance(appContext)
+        val initialCookiesPath = if (prefs.isUseCookies() && cookieFile.exists() && cookieFile.length() > 0) {
+            cookieFile.absolutePath
+        } else {
+            null
+        }
+
+        bridgeModule.callAttr("configure", ffmpegPath, qjsPath, cacheDir, updateDir, initialCookiesPath)
+    }
+
+    fun setCookiesPath(path: String?) {
+        bridgeModule.callAttr("set_cookies_path", path)
     }
 
     suspend fun getYtdlpVersion(): String = withContext(Dispatchers.IO) {
         bridgeModule.callAttr("get_ytdlp_version").toString()
     }
 
-    suspend fun probe(url: String): Result<ProbeResult> = withContext(Dispatchers.IO) {
+    suspend fun probe(url: String): Result<ProbeData> = withContext(Dispatchers.IO) {
         try {
             val jsonStr = bridgeModule.callAttr("probe_info", url).toString()
             val json = JSONObject(jsonStr)
@@ -84,44 +182,73 @@ class PythonBridge private constructor(private val appContext: Context) {
                 return@withContext Result.failure(Exception(err))
             }
 
+            val isPlaylist = json.optBoolean("is_playlist", false)
             val data = json.getJSONObject("data")
-            val formatsJson = data.getJSONArray("formats")
-            val formats = mutableListOf<MediaFormat>()
-            for (i in 0 until formatsJson.length()) {
-                val f = formatsJson.getJSONObject(i)
-                val audioCodecStr = if (!f.isNull("audio_codec")) f.optString("audio_codec").ifEmpty { null } else null
-                formats.add(
-                    MediaFormat(
-                        id = f.getString("id"),
-                        label = f.getString("label"),
-                        note = f.optString("note", ""),
-                        isAudioOnly = f.optBoolean("is_audio_only", false),
-                        audioCodec = audioCodecStr
+
+            if (isPlaylist) {
+                val entriesJson = data.getJSONArray("entries")
+                val entries = mutableListOf<PlaylistEntry>()
+                for (i in 0 until entriesJson.length()) {
+                    val e = entriesJson.getJSONObject(i)
+                    entries.add(
+                        PlaylistEntry(
+                            id = e.optString("id", ""),
+                            title = e.optString("title", "Item ${i + 1}"),
+                            durationSeconds = e.optLong("duration", 0L),
+                            thumbnailUrl = e.optString("thumbnail", ""),
+                            uploader = e.optString("uploader", ""),
+                            url = e.optString("url", "")
+                        )
                     )
-                )
-            }
-
-            val subLangsJson = data.optJSONArray("available_subtitles")
-            val subLangs = mutableListOf<String>()
-            if (subLangsJson != null) {
-                for (j in 0 until subLangsJson.length()) {
-                    subLangs.add(subLangsJson.getString(j))
                 }
-            }
-            val hasSubtitles = data.optBoolean("has_subtitles", false)
 
-            val probe = ProbeResult(
-                id = data.optString("id", ""),
-                title = data.optString("title", "Unknown Title"),
-                durationSeconds = data.optLong("duration", 0L),
-                thumbnailUrl = data.optString("thumbnail", ""),
-                uploader = data.optString("uploader", ""),
-                webpageUrl = data.optString("webpage_url", url),
-                formats = formats,
-                hasSubtitles = hasSubtitles,
-                availableSubtitles = subLangs
-            )
-            Result.success(probe)
+                val playlist = PlaylistProbeResult(
+                    id = data.optString("id", ""),
+                    title = data.optString("title", "Unknown Playlist"),
+                    uploader = data.optString("uploader", ""),
+                    itemCount = data.optInt("item_count", entries.size),
+                    entries = entries
+                )
+                Result.success(ProbeData.Playlist(playlist))
+            } else {
+                val formatsJson = data.getJSONArray("formats")
+                val formats = mutableListOf<MediaFormat>()
+                for (i in 0 until formatsJson.length()) {
+                    val f = formatsJson.getJSONObject(i)
+                    val audioCodecStr = if (!f.isNull("audio_codec")) f.optString("audio_codec").ifEmpty { null } else null
+                    formats.add(
+                        MediaFormat(
+                            id = f.getString("id"),
+                            label = f.getString("label"),
+                            note = f.optString("note", ""),
+                            isAudioOnly = f.optBoolean("is_audio_only", false),
+                            audioCodec = audioCodecStr
+                        )
+                    )
+                }
+
+                val subLangsJson = data.optJSONArray("available_subtitles")
+                val subLangs = mutableListOf<String>()
+                if (subLangsJson != null) {
+                    for (j in 0 until subLangsJson.length()) {
+                        subLangs.add(subLangsJson.getString(j))
+                    }
+                }
+                val hasSubtitles = data.optBoolean("has_subtitles", false)
+
+                val probe = ProbeResult(
+                    id = data.optString("id", ""),
+                    title = data.optString("title", "Unknown Title"),
+                    durationSeconds = data.optLong("duration", 0L),
+                    thumbnailUrl = data.optString("thumbnail", ""),
+                    uploader = data.optString("uploader", ""),
+                    webpageUrl = data.optString("webpage_url", url),
+                    formats = formats,
+                    hasSubtitles = hasSubtitles,
+                    availableSubtitles = subLangs
+                )
+                Result.success(ProbeData.Single(probe))
+            }
         } catch (e: Exception) {
             Result.failure(e)
         }

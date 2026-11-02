@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -19,13 +20,93 @@ object MediaStoreWriter {
         context: Context,
         sourceFile: File,
         fileName: String,
-        isAudioOnly: Boolean
+        isAudioOnly: Boolean,
+        uploader: String = "",
+        customStorageTreeUri: Uri? = null,
+        organizeByCreator: Boolean = false
     ): Uri? = withContext(Dispatchers.IO) {
         if (!sourceFile.exists()) return@withContext null
 
+        if (customStorageTreeUri != null) {
+            val safResult = saveToSafTree(
+                context = context,
+                sourceFile = sourceFile,
+                fileName = fileName,
+                isAudioOnly = isAudioOnly,
+                uploader = uploader,
+                treeUri = customStorageTreeUri,
+                organizeByCreator = organizeByCreator
+            )
+            if (safResult != null) {
+                return@withContext safResult
+            }
+        }
+
+        saveToMediaStore(context, sourceFile, fileName, isAudioOnly)
+    }
+
+    private fun saveToSafTree(
+        context: Context,
+        sourceFile: File,
+        fileName: String,
+        isAudioOnly: Boolean,
+        uploader: String,
+        treeUri: Uri,
+        organizeByCreator: Boolean
+    ): Uri? {
+        return try {
+            val rootDoc = DocumentFile.fromTreeUri(context, treeUri)
+            if (rootDoc == null || !rootDoc.canWrite()) {
+                return null
+            }
+
+            val mediaFolderName = if (isAudioOnly) "Music" else "Movies"
+            val mediaDir = rootDoc.findFile(mediaFolderName)
+                ?: rootDoc.createDirectory(mediaFolderName)
+                ?: return null
+
+            val targetDir = if (organizeByCreator && uploader.isNotBlank()) {
+                val safeCreatorName = sanitizeFolderName(uploader)
+                mediaDir.findFile(safeCreatorName)
+                    ?: mediaDir.createDirectory(safeCreatorName)
+                    ?: mediaDir
+            } else {
+                mediaDir
+            }
+
+            val mimeType = resolveMimeType(fileName, isAudioOnly)
+            val existing = targetDir.findFile(fileName)
+            if (existing != null && existing.isFile) {
+                existing.delete()
+            }
+
+            val targetDoc = targetDir.createFile(mimeType, fileName) ?: return null
+
+            context.contentResolver.openOutputStream(targetDoc.uri)?.use { outStream ->
+                FileInputStream(sourceFile).use { inStream ->
+                    inStream.copyTo(outStream, bufferSize = 64 * 1024)
+                }
+            } ?: return null
+
+            targetDoc.uri
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun sanitizeFolderName(name: String): String {
+        return name.replace(Regex("""[\\/:*?"<>|]"""), "_").trim().ifEmpty { "Unknown" }
+    }
+
+    private fun saveToMediaStore(
+        context: Context,
+        sourceFile: File,
+        fileName: String,
+        isAudioOnly: Boolean
+    ): Uri? {
         val mimeType = resolveMimeType(fileName, isAudioOnly)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val contentUri = if (isAudioOnly) {
                 MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
             } else {
@@ -46,7 +127,7 @@ object MediaStoreWriter {
             }
 
             val resolver = context.contentResolver
-            val uri = resolver.insert(contentUri, contentValues) ?: return@withContext null
+            val uri = resolver.insert(contentUri, contentValues) ?: return null
 
             try {
                 resolver.openOutputStream(uri)?.use { out ->

@@ -24,7 +24,12 @@ class DownloadRepository private constructor(context: Context) {
     val tasksFlow: StateFlow<List<DownloadTask>> = _tasksFlow.asStateFlow()
 
     val activeTasksFlow = _tasksFlow.map { list ->
-        list.filter { it.status == DownloadStatus.QUEUED || it.status == DownloadStatus.DOWNLOADING || it.status == DownloadStatus.PROCESSING }
+        list.filter {
+            it.status == DownloadStatus.QUEUED ||
+            it.status == DownloadStatus.DOWNLOADING ||
+            it.status == DownloadStatus.PROCESSING ||
+            it.status == DownloadStatus.PAUSED
+        }
     }
 
     val historyTasksFlow = _tasksFlow.map { list ->
@@ -52,6 +57,15 @@ class DownloadRepository private constructor(context: Context) {
         }
     }
 
+    suspend fun enqueueAll(tasks: List<DownloadTask>) {
+        if (tasks.isEmpty()) return
+        mutex.withLock {
+            db.insertOrUpdateAll(tasks)
+            val updated = db.getAllTasks()
+            _tasksFlow.value = updated
+        }
+    }
+
     suspend fun updateTask(task: DownloadTask) {
         mutex.withLock {
             db.insertOrUpdate(task)
@@ -74,6 +88,40 @@ class DownloadRepository private constructor(context: Context) {
                 speedBytesPerSec = speedBytes,
                 etaSeconds = etaSeconds,
                 status = status
+            )
+            db.insertOrUpdate(updated)
+            _tasksFlow.value = _tasksFlow.value.map { if (it.id == taskId) updated else it }
+        }
+    }
+
+    suspend fun pauseTask(taskId: String) {
+        mutex.withLock {
+            val current = _tasksFlow.value.find { it.id == taskId } ?: return@withLock
+            val updated = current.copy(status = DownloadStatus.PAUSED, speedBytesPerSec = 0.0, etaSeconds = 0)
+            db.insertOrUpdate(updated)
+            _tasksFlow.value = _tasksFlow.value.map { if (it.id == taskId) updated else it }
+        }
+    }
+
+    suspend fun resumeTask(taskId: String) {
+        mutex.withLock {
+            val current = _tasksFlow.value.find { it.id == taskId } ?: return@withLock
+            val updated = current.copy(status = DownloadStatus.QUEUED)
+            db.insertOrUpdate(updated)
+            _tasksFlow.value = _tasksFlow.value.map { if (it.id == taskId) updated else it }
+        }
+    }
+
+    suspend fun retryTask(taskId: String) {
+        mutex.withLock {
+            val current = _tasksFlow.value.find { it.id == taskId } ?: return@withLock
+            val updated = current.copy(
+                status = DownloadStatus.QUEUED,
+                progressPercent = 0f,
+                speedBytesPerSec = 0.0,
+                etaSeconds = 0,
+                errorMessage = null,
+                completedAt = null
             )
             db.insertOrUpdate(updated)
             _tasksFlow.value = _tasksFlow.value.map { if (it.id == taskId) updated else it }

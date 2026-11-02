@@ -136,6 +136,44 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
         db.insertWithOnConflict(TABLE_DOWNLOADS, null, values, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
+    fun insertOrUpdateAll(tasks: List<DownloadTask>) {
+        if (tasks.isEmpty()) return
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            for (task in tasks) {
+                val values = ContentValues().apply {
+                    put(COL_ID, task.id)
+                    put(COL_URL, task.url)
+                    put(COL_TITLE, task.title)
+                    put(COL_THUMBNAIL_URL, task.thumbnailUrl)
+                    put(COL_UPLOADER, task.uploader)
+                    put(COL_DURATION_SECONDS, task.durationSeconds)
+                    put(COL_FORMAT_ID, task.formatId)
+                    put(COL_FORMAT_LABEL, task.formatLabel)
+                    put(COL_IS_AUDIO_ONLY, if (task.isAudioOnly) 1 else 0)
+                    put(COL_AUDIO_CODEC, task.audioCodec)
+                    put(COL_EMBED_SUBTITLES, if (task.embedSubtitles) 1 else 0)
+                    put(COL_SUBTITLE_LANG, task.subtitleLang)
+                    put(COL_STATUS, task.status.name)
+                    put(COL_PROGRESS_PERCENT, task.progressPercent)
+                    put(COL_SPEED_BYTES, task.speedBytesPerSec)
+                    put(COL_ETA_SECONDS, task.etaSeconds)
+                    put(COL_FILE_SIZE, task.fileSize)
+                    put(COL_LOCAL_FILE_PATH, task.localFilePath)
+                    put(COL_MEDIA_STORE_URI, task.mediaStoreUri)
+                    put(COL_ERROR_MESSAGE, task.errorMessage)
+                    put(COL_CREATED_AT, task.createdAt)
+                    put(COL_COMPLETED_AT, task.completedAt)
+                }
+                db.insertWithOnConflict(TABLE_DOWNLOADS, null, values, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     fun deleteTask(taskId: String) {
         writableDatabase.delete(TABLE_DOWNLOADS, "$COL_ID = ?", arrayOf(taskId))
     }

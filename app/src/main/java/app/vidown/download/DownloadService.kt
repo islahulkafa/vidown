@@ -7,12 +7,15 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import app.vidown.MainActivity
 import app.vidown.data.model.DownloadStatus
+import app.vidown.data.model.DownloadTask
+import app.vidown.data.preferences.AppPreferences
 import app.vidown.data.repository.DownloadRepository
 import app.vidown.python.ProgressCallback
 import app.vidown.python.PythonBridge
@@ -21,6 +24,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.File
@@ -31,15 +35,18 @@ class DownloadService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var repository: DownloadRepository
     private lateinit var pythonBridge: PythonBridge
+    private lateinit var appPreferences: AppPreferences
     private lateinit var notificationManager: NotificationManager
 
     private val activeJobs = ConcurrentHashMap<String, Job>()
+    private val pausedTaskIds = ConcurrentHashMap.newKeySet<String>()
     private var isRunningQueue = false
 
     override fun onCreate() {
         super.onCreate()
         repository = DownloadRepository.getInstance(this)
         pythonBridge = PythonBridge.getInstance(this)
+        appPreferences = AppPreferences.getInstance(this)
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         createNotificationChannels()
     }
@@ -54,6 +61,24 @@ class DownloadService : Service() {
                 val taskId = intent.getStringExtra(EXTRA_TASK_ID)
                 if (taskId != null) {
                     cancelTask(taskId)
+                }
+            }
+            ACTION_PAUSE -> {
+                val taskId = intent.getStringExtra(EXTRA_TASK_ID)
+                if (taskId != null) {
+                    pauseTask(taskId)
+                }
+            }
+            ACTION_RESUME -> {
+                val taskId = intent.getStringExtra(EXTRA_TASK_ID)
+                if (taskId != null) {
+                    resumeTask(taskId)
+                }
+            }
+            ACTION_RETRY -> {
+                val taskId = intent.getStringExtra(EXTRA_TASK_ID)
+                if (taskId != null) {
+                    retryTask(taskId)
                 }
             }
         }
@@ -84,12 +109,26 @@ class DownloadService : Service() {
 
         serviceScope.launch {
             while (true) {
+                val maxConcurrent = appPreferences.getMaxConcurrentDownloads()
                 val tasks = repository.tasksFlow.first()
-                val queuedTask = tasks.firstOrNull { it.status == DownloadStatus.QUEUED }
-                if (queuedTask == null) {
+                val queuedTasks = tasks.filter {
+                    it.status == DownloadStatus.QUEUED && !activeJobs.containsKey(it.id)
+                }
+
+                if (activeJobs.isEmpty() && queuedTasks.isEmpty()) {
                     break
                 }
-                processTask(queuedTask.id)
+
+                val availableSlots = maxConcurrent - activeJobs.size
+                if (availableSlots > 0 && queuedTasks.isNotEmpty()) {
+                    val toLaunch = queuedTasks.take(availableSlots)
+                    for (task in toLaunch) {
+                        launchTask(task.id)
+                    }
+                }
+
+                updateConsolidatedNotification()
+                delay(500)
             }
             isRunningQueue = false
             stopForeground(STOP_FOREGROUND_DETACH)
@@ -97,99 +136,123 @@ class DownloadService : Service() {
         }
     }
 
-    private suspend fun processTask(taskId: String) {
-        val task = repository.getTask(taskId) ?: return
+    private fun launchTask(taskId: String) {
         val job = serviceScope.launch {
             try {
-                repository.updateProgress(taskId, 0f, 0.0, 0, DownloadStatus.DOWNLOADING)
-                updateTaskNotification(task.title, 0, "Starting download...")
+                processTask(taskId)
+            } finally {
+                activeJobs.remove(taskId)
+                updateConsolidatedNotification()
+            }
+        }
+        activeJobs[taskId] = job
+    }
 
-                val tempDir = File(cacheDir, "downloads/$taskId").apply { mkdirs() }
+    private suspend fun processTask(taskId: String) {
+        val task = repository.getTask(taskId) ?: return
+        try {
+            repository.updateProgress(taskId, task.progressPercent, 0.0, 0, DownloadStatus.DOWNLOADING)
+            updateConsolidatedNotification()
 
-                val callback = object : ProgressCallback {
-                    private var lastNotificationTime = 0L
+            val tempDir = File(cacheDir, "downloads/$taskId").apply { mkdirs() }
 
-                    override fun onProgress(
-                        taskId: String,
-                        percent: Double,
-                        speedBytes: Double,
-                        etaSeconds: Int,
-                        status: String
-                    ) {
-                        serviceScope.launch {
-                            val dlStatus = if (status == "processing") DownloadStatus.PROCESSING else DownloadStatus.DOWNLOADING
-                            repository.updateProgress(taskId, percent.toFloat(), speedBytes, etaSeconds, dlStatus)
+            val callback = object : ProgressCallback {
+                private var lastNotifyTime = 0L
 
-                            val now = System.currentTimeMillis()
-                            if (now - lastNotificationTime > 800) {
-                                lastNotificationTime = now
-                                val speedText = formatSpeed(speedBytes)
-                                val statusText = if (dlStatus == DownloadStatus.PROCESSING) {
-                                    "Processing / Multiplexing..."
-                                } else {
-                                    "$speedText • ETA ${formatEta(etaSeconds)}"
-                                }
-                                updateTaskNotification(task.title, percent.toInt(), statusText, taskId)
-                            }
+                override fun onProgress(
+                    taskId: String,
+                    percent: Double,
+                    speedBytes: Double,
+                    etaSeconds: Int,
+                    status: String
+                ) {
+                    serviceScope.launch {
+                        val dlStatus = if (status == "processing") DownloadStatus.PROCESSING else DownloadStatus.DOWNLOADING
+                        repository.updateProgress(taskId, percent.toFloat(), speedBytes, etaSeconds, dlStatus)
+
+                        val now = System.currentTimeMillis()
+                        if (now - lastNotifyTime > 800) {
+                            lastNotifyTime = now
+                            updateConsolidatedNotification()
                         }
                     }
                 }
+            }
 
-                val result = pythonBridge.download(
-                    taskId = taskId,
-                    url = task.url,
-                    formatId = task.formatId,
-                    outputDir = tempDir,
-                    callback = callback,
-                    audioCodec = task.audioCodec,
-                    embedSubtitles = task.embedSubtitles,
-                    subtitleLang = task.subtitleLang
+            val result = pythonBridge.download(
+                taskId = taskId,
+                url = task.url,
+                formatId = task.formatId,
+                outputDir = tempDir,
+                callback = callback,
+                audioCodec = task.audioCodec,
+                embedSubtitles = task.embedSubtitles,
+                subtitleLang = task.subtitleLang
+            )
+
+            if (result.isSuccess && result.filePath != null) {
+                repository.updateProgress(taskId, 100f, 0.0, 0, DownloadStatus.PROCESSING)
+                updateConsolidatedNotification()
+
+                val downloadedFile = File(result.filePath)
+                val fileName = result.fileName ?: downloadedFile.name
+
+                val customTreeUri = if (appPreferences.isUseCustomStorage()) {
+                    appPreferences.getCustomStorageUri()?.let { Uri.parse(it) }
+                } else {
+                    null
+                }
+
+                val savedUri = MediaStoreWriter.saveMediaFile(
+                    context = this@DownloadService,
+                    sourceFile = downloadedFile,
+                    fileName = fileName,
+                    isAudioOnly = task.isAudioOnly,
+                    uploader = task.uploader,
+                    customStorageTreeUri = customTreeUri,
+                    organizeByCreator = appPreferences.isOrganizeByCreator()
                 )
 
-                if (result.isSuccess && result.filePath != null) {
-                    repository.updateProgress(taskId, 100f, 0.0, 0, DownloadStatus.PROCESSING)
-                    updateTaskNotification(task.title, 100, "Saving to media storage...", taskId)
+                downloadedFile.delete()
+                tempDir.deleteRecursively()
 
-                    val downloadedFile = File(result.filePath)
-                    val fileName = result.fileName ?: downloadedFile.name
-                    val savedUri = MediaStoreWriter.saveMediaFile(
-                        context = this@DownloadService,
-                        sourceFile = downloadedFile,
-                        fileName = fileName,
-                        isAudioOnly = task.isAudioOnly
-                    )
-
-                    downloadedFile.delete()
-                    tempDir.deleteRecursively()
-
-                    val completedTask = task.copy(
-                        status = DownloadStatus.COMPLETED,
-                        progressPercent = 100f,
-                        fileSize = result.fileSize,
-                        localFilePath = result.filePath,
-                        mediaStoreUri = savedUri?.toString(),
-                        completedAt = System.currentTimeMillis()
-                    )
-                    repository.updateTask(completedTask)
-                    showCompletionNotification(task.title, true)
-                } else if (result.isCancelled) {
+                val completedTask = task.copy(
+                    status = DownloadStatus.COMPLETED,
+                    progressPercent = 100f,
+                    fileSize = result.fileSize,
+                    localFilePath = result.filePath,
+                    mediaStoreUri = savedUri?.toString(),
+                    completedAt = System.currentTimeMillis()
+                )
+                repository.updateTask(completedTask)
+                showCompletionNotification(task.title, true)
+            } else if (result.isCancelled || pausedTaskIds.contains(taskId)) {
+                val isPaused = pausedTaskIds.remove(taskId)
+                if (isPaused) {
+                    repository.pauseTask(taskId)
+                } else {
                     tempDir.deleteRecursively()
                     val cancelledTask = task.copy(
                         status = DownloadStatus.CANCELLED,
                         completedAt = System.currentTimeMillis()
                     )
                     repository.updateTask(cancelledTask)
-                } else {
-                    tempDir.deleteRecursively()
-                    val failedTask = task.copy(
-                        status = DownloadStatus.FAILED,
-                        errorMessage = result.errorMessage ?: "Unknown error",
-                        completedAt = System.currentTimeMillis()
-                    )
-                    repository.updateTask(failedTask)
-                    showCompletionNotification(task.title, false, result.errorMessage)
                 }
-            } catch (e: Exception) {
+            } else {
+                tempDir.deleteRecursively()
+                val failedTask = task.copy(
+                    status = DownloadStatus.FAILED,
+                    errorMessage = result.errorMessage ?: "Unknown error",
+                    completedAt = System.currentTimeMillis()
+                )
+                repository.updateTask(failedTask)
+                showCompletionNotification(task.title, false, result.errorMessage)
+            }
+        } catch (e: Exception) {
+            val isPaused = pausedTaskIds.remove(taskId)
+            if (isPaused) {
+                repository.pauseTask(taskId)
+            } else {
                 val failedTask = task.copy(
                     status = DownloadStatus.FAILED,
                     errorMessage = e.message ?: e.toString(),
@@ -197,46 +260,107 @@ class DownloadService : Service() {
                 )
                 repository.updateTask(failedTask)
                 showCompletionNotification(task.title, false, e.message)
-            } finally {
-                activeJobs.remove(taskId)
             }
         }
-
-        activeJobs[taskId] = job
-        job.join()
     }
 
-    private fun cancelTask(taskId: String) {
+    private fun pauseTask(taskId: String) {
+        pausedTaskIds.add(taskId)
         pythonBridge.cancel(taskId)
         activeJobs[taskId]?.cancel()
         activeJobs.remove(taskId)
+        serviceScope.launch {
+            repository.pauseTask(taskId)
+            updateConsolidatedNotification()
+        }
     }
 
-    private fun updateTaskNotification(title: String, progress: Int, statusText: String, taskId: String? = null) {
-        val cancelPendingIntent = taskId?.let {
-            val cancelIntent = Intent(this, DownloadService::class.java).apply {
-                action = ACTION_CANCEL
-                putExtra(EXTRA_TASK_ID, it)
-            }
-            PendingIntent.getService(
-                this,
-                it.hashCode(),
-                cancelIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
+    private fun resumeTask(taskId: String) {
+        pausedTaskIds.remove(taskId)
+        serviceScope.launch {
+            repository.resumeTask(taskId)
+            startForegroundNotification()
+            triggerQueueProcessing()
         }
+    }
+
+    private fun retryTask(taskId: String) {
+        pausedTaskIds.remove(taskId)
+        serviceScope.launch {
+            repository.retryTask(taskId)
+            startForegroundNotification()
+            triggerQueueProcessing()
+        }
+    }
+
+    private fun cancelTask(taskId: String) {
+        pausedTaskIds.remove(taskId)
+        pythonBridge.cancel(taskId)
+        activeJobs[taskId]?.cancel()
+        activeJobs.remove(taskId)
+        val tempDir = File(cacheDir, "downloads/$taskId")
+        tempDir.deleteRecursively()
+        serviceScope.launch {
+            val current = repository.getTask(taskId)
+            if (current != null) {
+                repository.updateTask(current.copy(status = DownloadStatus.CANCELLED))
+            }
+            updateConsolidatedNotification()
+        }
+    }
+
+    private fun updateConsolidatedNotification() {
+        val runningIds = activeJobs.keys.toList()
+        if (runningIds.isEmpty()) return
+
+        val allTasks = repository.tasksFlow.value
+        val activeTasks = allTasks.filter { runningIds.contains(it.id) }
+        if (activeTasks.isEmpty()) return
+
+        val activeCount = activeTasks.size
+        val totalSpeed = activeTasks.sumOf { it.speedBytesPerSec }
+        val avgPercent = if (activeCount > 0) {
+            activeTasks.sumOf { it.progressPercent.toDouble() } / activeCount
+        } else {
+            0.0
+        }
+
+        val title = if (activeCount == 1) {
+            activeTasks.first().title
+        } else {
+            "Downloading $activeCount items"
+        }
+
+        val speedText = formatSpeed(totalSpeed)
+        val statusText = if (activeCount == 1) {
+            val single = activeTasks.first()
+            if (single.status == DownloadStatus.PROCESSING) {
+                "Processing / Multiplexing..."
+            } else {
+                "$speedText • ETA ${formatEta(single.etaSeconds)}"
+            }
+        } else {
+            "$speedText • ${avgPercent.toInt()}%"
+        }
+
+        val openIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
 
         val builder = NotificationCompat.Builder(this, CHANNEL_DOWNLOADS)
             .setContentTitle(title)
             .setContentText(statusText)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setProgress(100, progress, progress <= 0)
+            .setProgress(100, avgPercent.toInt(), avgPercent <= 0)
+            .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-
-        if (cancelPendingIntent != null) {
-            builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Cancel", cancelPendingIntent)
-        }
 
         notificationManager.notify(NOTIFICATION_ID, builder.build())
     }
@@ -316,6 +440,9 @@ class DownloadService : Service() {
 
         const val ACTION_ENQUEUE = "app.vidown.action.ENQUEUE"
         const val ACTION_CANCEL = "app.vidown.action.CANCEL"
+        const val ACTION_PAUSE = "app.vidown.action.PAUSE"
+        const val ACTION_RESUME = "app.vidown.action.RESUME"
+        const val ACTION_RETRY = "app.vidown.action.RETRY"
         const val EXTRA_TASK_ID = "extra_task_id"
 
         fun enqueue(context: Context) {
@@ -332,6 +459,30 @@ class DownloadService : Service() {
         fun cancel(context: Context, taskId: String) {
             val intent = Intent(context, DownloadService::class.java).apply {
                 action = ACTION_CANCEL
+                putExtra(EXTRA_TASK_ID, taskId)
+            }
+            context.startService(intent)
+        }
+
+        fun pause(context: Context, taskId: String) {
+            val intent = Intent(context, DownloadService::class.java).apply {
+                action = ACTION_PAUSE
+                putExtra(EXTRA_TASK_ID, taskId)
+            }
+            context.startService(intent)
+        }
+
+        fun resume(context: Context, taskId: String) {
+            val intent = Intent(context, DownloadService::class.java).apply {
+                action = ACTION_RESUME
+                putExtra(EXTRA_TASK_ID, taskId)
+            }
+            context.startService(intent)
+        }
+
+        fun retry(context: Context, taskId: String) {
+            val intent = Intent(context, DownloadService::class.java).apply {
+                action = ACTION_RETRY
                 putExtra(EXTRA_TASK_ID, taskId)
             }
             context.startService(intent)

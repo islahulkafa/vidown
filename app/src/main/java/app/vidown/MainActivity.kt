@@ -123,6 +123,7 @@ fun MainAppNavScaffold(
                 HomeRoute(
                     viewModel = viewModel,
                     onNavigateToQueue = { currentDestination = AppDestination.QUEUE },
+                    onNavigateToSettings = { currentDestination = AppDestination.SETTINGS },
                     modifier = Modifier.fillMaxSize()
                 )
             }

@@ -17,8 +17,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
+import com.adamglin.phosphoricons.regular.ArrowCounterClockwise
 import com.adamglin.phosphoricons.regular.DownloadSimple
 import com.adamglin.phosphoricons.regular.Hourglass
+import com.adamglin.phosphoricons.regular.Pause
+import com.adamglin.phosphoricons.regular.Play
 import com.adamglin.phosphoricons.regular.X
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -56,6 +59,9 @@ fun QueueRoute(
     QueueScreen(
         activeTasks = activeTasks,
         onCancelTask = viewModel::cancelTask,
+        onPauseTask = viewModel::pauseTask,
+        onResumeTask = viewModel::resumeTask,
+        onRetryTask = viewModel::retryTask,
         modifier = modifier
     )
 }
@@ -65,18 +71,38 @@ fun QueueRoute(
 fun QueueScreen(
     activeTasks: List<DownloadTask>,
     onCancelTask: (String) -> Unit,
+    onPauseTask: (String) -> Unit,
+    onResumeTask: (String) -> Unit,
+    onRetryTask: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val activeCount = activeTasks.count { it.status == DownloadStatus.DOWNLOADING || it.status == DownloadStatus.PROCESSING }
+    val queuedCount = activeTasks.count { it.status == DownloadStatus.QUEUED }
+    val pausedCount = activeTasks.count { it.status == DownloadStatus.PAUSED }
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        text = "Queue",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Column {
+                        Text(
+                            text = "Queue",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        if (activeTasks.isNotEmpty()) {
+                            val subtitleParts = mutableListOf<String>()
+                            if (activeCount > 0) subtitleParts.add("$activeCount active")
+                            if (queuedCount > 0) subtitleParts.add("$queuedCount queued")
+                            if (pausedCount > 0) subtitleParts.add("$pausedCount paused")
+                            Text(
+                                text = subtitleParts.joinToString(" • "),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color.Transparent,
@@ -129,7 +155,10 @@ fun QueueScreen(
                 ) { task ->
                     ActiveTaskCard(
                         task = task,
-                        onCancel = { onCancelTask(task.id) }
+                        onCancel = { onCancelTask(task.id) },
+                        onPause = { onPauseTask(task.id) },
+                        onResume = { onResumeTask(task.id) },
+                        onRetry = { onRetryTask(task.id) }
                     )
                 }
             }
@@ -140,7 +169,10 @@ fun QueueScreen(
 @Composable
 private fun ActiveTaskCard(
     task: DownloadTask,
-    onCancel: () -> Unit
+    onCancel: () -> Unit,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onRetry: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -180,37 +212,80 @@ private fun ActiveTaskCard(
                     )
                 }
 
-                IconButton(
-                    onClick = onCancel,
-                    modifier = Modifier.size(48.dp)
-                ) {
-                    Icon(
-                        imageVector = PhosphorIcons.Regular.X,
-                        contentDescription = "Cancel Download",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    when (task.status) {
+                        DownloadStatus.DOWNLOADING -> {
+                            IconButton(onClick = onPause) {
+                                Icon(
+                                    imageVector = PhosphorIcons.Regular.Pause,
+                                    contentDescription = "Pause Download",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        DownloadStatus.PAUSED -> {
+                            IconButton(onClick = onResume) {
+                                Icon(
+                                    imageVector = PhosphorIcons.Regular.Play,
+                                    contentDescription = "Resume Download",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        DownloadStatus.FAILED -> {
+                            IconButton(onClick = onRetry) {
+                                Icon(
+                                    imageVector = PhosphorIcons.Regular.ArrowCounterClockwise,
+                                    contentDescription = "Retry Download",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        else -> {}
+                    }
+
+                    IconButton(onClick = onCancel) {
+                        Icon(
+                            imageVector = PhosphorIcons.Regular.X,
+                            contentDescription = "Cancel Download",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            if (task.status == DownloadStatus.PROCESSING) {
-                LinearProgressIndicator(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(6.dp),
-                    color = MaterialTheme.colorScheme.onSurface,
-                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
-                )
-            } else {
-                LinearProgressIndicator(
-                    progress = { task.progressPercent / 100f },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(6.dp),
-                    color = MaterialTheme.colorScheme.onSurface,
-                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
-                )
+            when (task.status) {
+                DownloadStatus.PROCESSING -> {
+                    LinearProgressIndicator(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                    )
+                }
+                DownloadStatus.PAUSED -> {
+                    LinearProgressIndicator(
+                        progress = { task.progressPercent / 100f },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp),
+                        color = MaterialTheme.colorScheme.outline,
+                        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                    )
+                }
+                else -> {
+                    LinearProgressIndicator(
+                        progress = { task.progressPercent / 100f },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -223,13 +298,15 @@ private fun ActiveTaskCard(
                     DownloadStatus.QUEUED -> "Queued"
                     DownloadStatus.DOWNLOADING -> String.format("%.1f%%", task.progressPercent)
                     DownloadStatus.PROCESSING -> "Processing..."
+                    DownloadStatus.PAUSED -> String.format("Paused (%.1f%%)", task.progressPercent)
+                    DownloadStatus.FAILED -> "Failed"
                     else -> task.status.name
                 }
                 Text(
                     text = statusText,
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = if (task.status == DownloadStatus.PAUSED) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.onSurface
                 )
 
                 if (task.status == DownloadStatus.DOWNLOADING && task.speedBytesPerSec > 0) {

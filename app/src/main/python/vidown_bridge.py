@@ -9,16 +9,18 @@ _CONFIG = {
     "ffmpeg_path": None,
     "qjs_path": None,
     "cache_dir": None,
-    "update_dir": None
+    "update_dir": None,
+    "cookies_path": None
 }
 
 _CANCELLED_TASKS = set()
 
-def configure(ffmpeg_path, qjs_path, cache_dir, update_dir):
+def configure(ffmpeg_path, qjs_path, cache_dir, update_dir, cookies_path=None):
     _CONFIG["ffmpeg_path"] = ffmpeg_path
     _CONFIG["qjs_path"] = qjs_path
     _CONFIG["cache_dir"] = cache_dir
     _CONFIG["update_dir"] = update_dir
+    _CONFIG["cookies_path"] = cookies_path if (cookies_path and os.path.exists(cookies_path)) else None
 
     if update_dir and os.path.isdir(update_dir):
         if update_dir not in sys.path:
@@ -30,6 +32,10 @@ def configure(ffmpeg_path, qjs_path, cache_dir, update_dir):
         if ffmpeg_dir not in cur_path:
             os.environ["PATH"] = ffmpeg_dir + os.pathsep + cur_path
 
+    return json.dumps({"status": "ok"})
+
+def set_cookies_path(path):
+    _CONFIG["cookies_path"] = path if (path and os.path.exists(path)) else None
     return json.dumps({"status": "ok"})
 
 def get_ytdlp_version():
@@ -52,7 +58,7 @@ def probe_info(url):
             "quiet": True,
             "no_warnings": True,
             "skip_download": True,
-            "noplaylist": True,
+            "extract_flat": "in_playlist",
         }
 
         if _CONFIG.get("qjs_path") and os.path.exists(_CONFIG["qjs_path"]):
@@ -60,10 +66,69 @@ def probe_info(url):
                 "quickjs": {"path": _CONFIG["qjs_path"]}
             }
 
+        if _CONFIG.get("cookies_path") and os.path.exists(_CONFIG["cookies_path"]):
+            ydl_opts["cookiefile"] = _CONFIG["cookies_path"]
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             if not info:
                 return json.dumps({"status": "error", "error": "No media info returned"})
+
+            is_playlist = info.get("_type") == "playlist" or bool(info.get("entries"))
+
+            if is_playlist:
+                raw_entries = info.get("entries")
+                if hasattr(raw_entries, "__iter__"):
+                    raw_entries = list(raw_entries)
+                else:
+                    raw_entries = []
+
+                parsed_entries = []
+                for idx, entry in enumerate(raw_entries):
+                    if not entry:
+                        continue
+                    entry_id = str(entry.get("id") or "")
+                    entry_title = str(entry.get("title") or f"Item {idx + 1}")
+                    entry_duration = entry.get("duration") or 0
+                    entry_uploader = str(entry.get("uploader") or info.get("uploader") or "")
+
+                    entry_thumb = str(entry.get("thumbnail") or "")
+                    if not entry_thumb and entry.get("thumbnails"):
+                        thumbs = entry.get("thumbnails")
+                        if isinstance(thumbs, list) and thumbs:
+                            entry_thumb = str(thumbs[-1].get("url") or "")
+
+                    entry_url = str(entry.get("webpage_url") or entry.get("url") or "")
+                    if not entry_url.startswith("http"):
+                        if entry_id:
+                            if "youtube" in url or "youtu.be" in url:
+                                entry_url = f"https://www.youtube.com/watch?v={entry_id}"
+                            else:
+                                entry_url = str(entry.get("url") or url)
+                        else:
+                            entry_url = url
+
+                    parsed_entries.append({
+                        "id": entry_id,
+                        "title": entry_title,
+                        "duration": int(entry_duration) if entry_duration else 0,
+                        "thumbnail": entry_thumb,
+                        "uploader": entry_uploader,
+                        "url": entry_url
+                    })
+
+                playlist_data = {
+                    "id": str(info.get("id") or ""),
+                    "title": str(info.get("title") or "Unknown Playlist"),
+                    "uploader": str(info.get("uploader") or ""),
+                    "item_count": len(parsed_entries),
+                    "entries": parsed_entries
+                }
+                return json.dumps({
+                    "status": "ok",
+                    "is_playlist": True,
+                    "data": playlist_data
+                })
 
             title = info.get("title", "Unknown Title")
             duration = info.get("duration", 0)
@@ -93,7 +158,7 @@ def probe_info(url):
                 if height and vcodec != "none" and height not in seen_heights:
                     seen_heights.add(height)
                     formats.append({
-                        "id": f"bestvideo[height<={height}]+bestaudio/best[height<={height}]",
+                        "id": f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/best",
                         "label": f"{height}p Video",
                         "note": f"Resolution up to {height}p with audio",
                         "is_audio_only": False,
@@ -101,21 +166,21 @@ def probe_info(url):
                     })
 
             formats.append({
-                "id": "bestaudio/m4a",
+                "id": "bestaudio/m4a/bestaudio/best",
                 "label": "M4A Audio (AAC)",
                 "note": "Universal Android compatibility",
                 "is_audio_only": True,
                 "audio_codec": "m4a"
             })
             formats.append({
-                "id": "bestaudio/opus",
+                "id": "bestaudio/opus/bestaudio/best",
                 "label": "OPUS Audio",
                 "note": "High efficiency stream",
                 "is_audio_only": True,
                 "audio_codec": "opus"
             })
             formats.append({
-                "id": "bestaudio/flac",
+                "id": "bestaudio/flac/bestaudio/best",
                 "label": "FLAC Audio",
                 "note": "Lossless CD quality",
                 "is_audio_only": True,
@@ -140,7 +205,11 @@ def probe_info(url):
                 "has_subtitles": has_subtitles,
                 "available_subtitles": all_sub_langs
             }
-            return json.dumps({"status": "ok", "data": data})
+            return json.dumps({
+                "status": "ok",
+                "is_playlist": False,
+                "data": data
+            })
 
     except Exception as e:
         return json.dumps({
@@ -255,6 +324,9 @@ def download_media(task_id, url, format_id, out_dir, callback_obj, audio_codec=N
             ydl_opts["js_runtimes"] = {
                 "quickjs": {"path": _CONFIG["qjs_path"]}
             }
+
+        if _CONFIG.get("cookies_path") and os.path.exists(_CONFIG["cookies_path"]):
+            ydl_opts["cookiefile"] = _CONFIG["cookies_path"]
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ret_code = ydl.download([url])
