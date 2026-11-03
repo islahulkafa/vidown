@@ -10,7 +10,16 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
 import com.adamglin.phosphoricons.regular.ClockCounterClockwise
@@ -18,15 +27,20 @@ import com.adamglin.phosphoricons.regular.DownloadSimple
 import com.adamglin.phosphoricons.regular.Gear
 import com.adamglin.phosphoricons.regular.House
 import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import app.vidown.ui.MainViewModel
 import app.vidown.ui.screens.HistoryRoute
@@ -99,51 +113,88 @@ fun MainAppNavScaffold(
     modifier: Modifier = Modifier
 ) {
     var currentDestination by rememberSaveable { mutableStateOf(AppDestination.HOME) }
+    var isSettingsSubSectionOpen by rememberSaveable { mutableStateOf(false) }
 
-    NavigationSuiteScaffold(
-        modifier = modifier,
-        navigationSuiteItems = {
-            AppDestination.entries.forEach { destination ->
-                item(
-                    icon = {
-                        Icon(
-                            imageVector = destination.icon,
-                            contentDescription = destination.label
+    val showBottomBar = currentDestination != AppDestination.SETTINGS || !isSettingsSubSectionOpen
+
+    Scaffold(
+        modifier = modifier.fillMaxSize(),
+        bottomBar = {
+            AnimatedVisibility(
+                visible = showBottomBar,
+                enter = slideInVertically(
+                    initialOffsetY = { it },
+                    animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing)
+                ) + fadeIn(animationSpec = tween(durationMillis = 200)),
+                exit = slideOutVertically(
+                    targetOffsetY = { it },
+                    animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing)
+                ) + fadeOut(animationSpec = tween(durationMillis = 150))
+            ) {
+                NavigationBar {
+                    AppDestination.entries.forEach { destination ->
+                        NavigationBarItem(
+                            icon = {
+                                Icon(
+                                    imageVector = destination.icon,
+                                    contentDescription = destination.label
+                                )
+                            },
+                            label = { Text(destination.label) },
+                            selected = destination == currentDestination,
+                            onClick = {
+                                if (currentDestination != destination) {
+                                    currentDestination = destination
+                                }
+                            }
                         )
-                    },
-                    label = { Text(destination.label) },
-                    selected = destination == currentDestination,
-                    onClick = { currentDestination = destination }
-                )
+                    }
+                }
             }
         }
-    ) {
-        when (currentDestination) {
-            AppDestination.HOME -> {
-                HomeRoute(
-                    viewModel = viewModel,
-                    onNavigateToQueue = { currentDestination = AppDestination.QUEUE },
-                    onNavigateToSettings = { currentDestination = AppDestination.SETTINGS },
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-            AppDestination.QUEUE -> {
-                QueueRoute(
-                    viewModel = viewModel,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-            AppDestination.HISTORY -> {
-                HistoryRoute(
-                    viewModel = viewModel,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-            AppDestination.SETTINGS -> {
-                SettingsRoute(
-                    viewModel = viewModel,
-                    modifier = Modifier.fillMaxSize()
-                )
+    ) { innerPadding ->
+        var stableBottomPadding by remember { mutableStateOf(80.dp) }
+        val currentBottom = innerPadding.calculateBottomPadding()
+        if (currentBottom > 0.dp) {
+            stableBottomPadding = currentBottom
+        }
+
+        Box(modifier = Modifier.fillMaxSize()) {
+            when (currentDestination) {
+                AppDestination.HOME -> {
+                    HomeRoute(
+                        viewModel = viewModel,
+                        onNavigateToQueue = { currentDestination = AppDestination.QUEUE },
+                        onNavigateToSettings = { currentDestination = AppDestination.SETTINGS },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(bottom = stableBottomPadding)
+                    )
+                }
+                AppDestination.QUEUE -> {
+                    QueueRoute(
+                        viewModel = viewModel,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(bottom = stableBottomPadding)
+                    )
+                }
+                AppDestination.HISTORY -> {
+                    HistoryRoute(
+                        viewModel = viewModel,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(bottom = stableBottomPadding)
+                    )
+                }
+                AppDestination.SETTINGS -> {
+                    SettingsRoute(
+                        viewModel = viewModel,
+                        bottomBarPadding = stableBottomPadding,
+                        onSubSectionChange = { isSettingsSubSectionOpen = it },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
         }
     }

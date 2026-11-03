@@ -28,8 +28,12 @@ import com.adamglin.phosphoricons.regular.Key
 import com.adamglin.phosphoricons.regular.MagnifyingGlass
 import com.adamglin.phosphoricons.regular.MusicNote
 import com.adamglin.phosphoricons.regular.Playlist
+import com.adamglin.phosphoricons.regular.CaretRight
+import com.adamglin.phosphoricons.regular.ClosedCaptioning
+import com.adamglin.phosphoricons.regular.SlidersHorizontal
 import com.adamglin.phosphoricons.regular.Subtitles
 import com.adamglin.phosphoricons.regular.Video
+import app.vidown.ui.components.SubtitleSelectionSheet
 import com.adamglin.phosphoricons.regular.X
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -94,6 +98,13 @@ fun HomeRoute(
         },
         onFormatSelected = viewModel::selectFormat,
         onEmbedSubtitlesToggled = viewModel::toggleEmbedSubtitles,
+        onConfigureSubtitles = viewModel::openSubtitleSheet,
+        onDismissSubtitleSheet = viewModel::dismissSubtitleSheet,
+        onToggleSubtitleLanguage = viewModel::toggleSubtitleLanguage,
+        onSelectAllSubtitleLanguages = viewModel::selectAllSubtitleLanguages,
+        onClearAllSubtitleLanguages = viewModel::clearAllSubtitleLanguages,
+        onSubtitleDeliveryModeChanged = viewModel::setSubtitleDeliveryMode,
+        onSubtitleFormatChanged = viewModel::setSubtitleFormat,
         onDownloadClicked = {
             viewModel.startDownload(onEnqueued = onNavigateToQueue)
         },
@@ -104,6 +115,7 @@ fun HomeRoute(
         onDeselectAllPlaylistItems = viewModel::deselectAllPlaylistItems,
         onSelectBatchPreset = viewModel::selectBatchPreset,
         onToggleBatchSubtitles = viewModel::toggleBatchSubtitles,
+        onBatchSubtitleDeliveryModeChanged = viewModel::setBatchSubtitleDeliveryMode,
         onBatchDownloadClicked = {
             viewModel.startBatchDownload(onEnqueued = onNavigateToQueue)
         },
@@ -121,6 +133,13 @@ fun HomeScreen(
     onPasteClicked: () -> Unit,
     onFormatSelected: (MediaFormat) -> Unit,
     onEmbedSubtitlesToggled: (Boolean) -> Unit = {},
+    onConfigureSubtitles: () -> Unit = {},
+    onDismissSubtitleSheet: () -> Unit = {},
+    onToggleSubtitleLanguage: (String) -> Unit = {},
+    onSelectAllSubtitleLanguages: (List<String>) -> Unit = {},
+    onClearAllSubtitleLanguages: () -> Unit = {},
+    onSubtitleDeliveryModeChanged: (String) -> Unit = {},
+    onSubtitleFormatChanged: (String) -> Unit = {},
     onDownloadClicked: () -> Unit,
     onOpenPlaylistSheet: () -> Unit = {},
     onDismissPlaylistSheet: () -> Unit = {},
@@ -129,6 +148,7 @@ fun HomeScreen(
     onDeselectAllPlaylistItems: () -> Unit = {},
     onSelectBatchPreset: (BatchPreset) -> Unit = {},
     onToggleBatchSubtitles: (Boolean) -> Unit = {},
+    onBatchSubtitleDeliveryModeChanged: (String) -> Unit = {},
     onBatchDownloadClicked: () -> Unit = {},
     onConfigureCookiesClicked: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -314,35 +334,81 @@ fun HomeScreen(
                             ),
                             shape = RoundedCornerShape(16.dp)
                         ) {
-                            Row(
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                    .padding(16.dp)
                             ) {
-                                Icon(
-                                    imageVector = PhosphorIcons.Regular.Subtitles,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(modifier = Modifier.width(16.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "Subtitles",
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.Medium,
-                                        color = MaterialTheme.colorScheme.onSurface
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = PhosphorIcons.Regular.ClosedCaptioning,
+                                        contentDescription = null,
+                                        tint = if (uiState.embedSubtitles) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                                     )
-                                    Text(
-                                        text = "Embed subtitles into video",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    Spacer(modifier = Modifier.width(16.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Subtitles",
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            fontWeight = FontWeight.Medium,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        val subtitleDesc = if (uiState.embedSubtitles) {
+                                            val count = uiState.selectedSubtitleLangs.size
+                                            val modeLabel = if (uiState.subtitleDeliveryMode == "embed") "Soft-Embed" else "External .${uiState.subtitleFormat}"
+                                            "$count language${if (count != 1) "s" else ""} • $modeLabel"
+                                        } else {
+                                            "Extract and deliver subtitles"
+                                        }
+                                        Text(
+                                            text = subtitleDesc,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Switch(
+                                        checked = uiState.embedSubtitles,
+                                        onCheckedChange = onEmbedSubtitlesToggled
                                     )
                                 }
-                                Switch(
-                                    checked = uiState.embedSubtitles,
-                                    onCheckedChange = onEmbedSubtitlesToggled
-                                )
+
+                                if (uiState.embedSubtitles) {
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable(onClick = onConfigureSubtitles),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                imageVector = PhosphorIcons.Regular.SlidersHorizontal,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = "Configure tracks & delivery",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                        Icon(
+                                            imageVector = PhosphorIcons.Regular.CaretRight,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -370,18 +436,35 @@ fun HomeScreen(
         }
     }
 
+    if (uiState.isSubtitleSheetOpen && uiState.probeState is ProbeUiState.Success) {
+        SubtitleSelectionSheet(
+            availableTracks = uiState.probeState.probe.subtitleTracks,
+            selectedLangs = uiState.selectedSubtitleLangs,
+            deliveryMode = uiState.subtitleDeliveryMode,
+            subtitleFormat = uiState.subtitleFormat,
+            onToggleLanguage = onToggleSubtitleLanguage,
+            onSelectAll = onSelectAllSubtitleLanguages,
+            onClearAll = onClearAllSubtitleLanguages,
+            onDeliveryModeChanged = onSubtitleDeliveryModeChanged,
+            onSubtitleFormatChanged = onSubtitleFormatChanged,
+            onDismiss = onDismissSubtitleSheet
+        )
+    }
+
     if (uiState.isPlaylistSheetOpen && uiState.probeState is ProbeUiState.Playlist) {
         PlaylistSelectionSheet(
             playlist = uiState.probeState.playlist,
             selectedItemIds = uiState.selectedPlaylistItems,
             selectedBatchPreset = uiState.selectedBatchPreset,
             embedSubtitles = uiState.embedBatchSubtitles,
+            batchSubtitleDeliveryMode = uiState.batchSubtitleDeliveryMode,
             onDismiss = onDismissPlaylistSheet,
             onToggleItem = onTogglePlaylistItem,
             onSelectAll = onSelectAllPlaylistItems,
             onDeselectAll = onDeselectAllPlaylistItems,
             onSelectPreset = onSelectBatchPreset,
             onToggleSubtitles = onToggleBatchSubtitles,
+            onSetSubtitleDeliveryMode = onBatchSubtitleDeliveryModeChanged,
             onDownloadClicked = onBatchDownloadClicked
         )
     }

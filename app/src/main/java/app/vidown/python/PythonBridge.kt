@@ -14,6 +14,24 @@ interface ProgressCallback {
     fun onProgress(taskId: String, percent: Double, speedBytes: Double, etaSeconds: Int, status: String)
 }
 
+data class SubtitleTrack(
+    val code: String,
+    val name: String = "",
+    val isAuto: Boolean = false
+) {
+    val displayName: String
+        get() {
+            if (name.isNotBlank()) return name
+            return try {
+                val loc = java.util.Locale.forLanguageTag(code)
+                val display = loc.getDisplayName(java.util.Locale.getDefault())
+                if (display.isNotBlank() && display != code) display else code
+            } catch (_: Exception) {
+                code
+            }
+        }
+}
+
 data class ProbeResult(
     val id: String,
     val title: String,
@@ -23,7 +41,8 @@ data class ProbeResult(
     val webpageUrl: String,
     val formats: List<MediaFormat>,
     val hasSubtitles: Boolean = false,
-    val availableSubtitles: List<String> = emptyList()
+    val availableSubtitles: List<String> = emptyList(),
+    val subtitleTracks: List<SubtitleTrack> = emptyList()
 )
 
 data class PlaylistEntry(
@@ -58,9 +77,9 @@ data class BatchPreset(
 
 val DEFAULT_BATCH_PRESETS = listOf(
     BatchPreset(
-        id = "b",
-        label = "Best Video",
-        note = "Fastest single file stream",
+        id = "bestvideo*+bestaudio/best",
+        label = "Best Quality",
+        note = "Maximum video and audio quality",
         isAudioOnly = false
     ),
     BatchPreset(
@@ -125,6 +144,7 @@ data class DownloadResult(
     val filePath: String? = null,
     val fileName: String? = null,
     val fileSize: Long = 0L,
+    val companionFiles: List<String> = emptyList(),
     val errorMessage: String? = null
 )
 
@@ -135,6 +155,14 @@ data class UpdateResult(
     val newVersion: String = "",
     val errorMessage: String? = null
 )
+
+fun normalizeFormatId(formatId: String, isAudioOnly: Boolean = false): String {
+    val trimmed = formatId.trim()
+    if (trimmed.isEmpty() || trimmed == "b" || trimmed == "best") {
+        return if (isAudioOnly) "bestaudio/best" else "bestvideo*+bestaudio/best"
+    }
+    return trimmed
+}
 
 class PythonBridge private constructor(private val appContext: Context) {
 
@@ -234,6 +262,22 @@ class PythonBridge private constructor(private val appContext: Context) {
                         subLangs.add(subLangsJson.getString(j))
                     }
                 }
+
+                val tracksJson = data.optJSONArray("subtitle_tracks")
+                val tracks = mutableListOf<SubtitleTrack>()
+                if (tracksJson != null) {
+                    for (k in 0 until tracksJson.length()) {
+                        val t = tracksJson.getJSONObject(k)
+                        tracks.add(
+                            SubtitleTrack(
+                                code = t.optString("code", ""),
+                                name = t.optString("name", ""),
+                                isAuto = t.optBoolean("is_auto", false)
+                            )
+                        )
+                    }
+                }
+
                 val hasSubtitles = data.optBoolean("has_subtitles", false)
 
                 val probe = ProbeResult(
@@ -245,7 +289,8 @@ class PythonBridge private constructor(private val appContext: Context) {
                     webpageUrl = data.optString("webpage_url", url),
                     formats = formats,
                     hasSubtitles = hasSubtitles,
-                    availableSubtitles = subLangs
+                    availableSubtitles = subLangs,
+                    subtitleTracks = tracks
                 )
                 Result.success(ProbeData.Single(probe))
             }
@@ -262,7 +307,10 @@ class PythonBridge private constructor(private val appContext: Context) {
         callback: ProgressCallback?,
         audioCodec: String? = null,
         embedSubtitles: Boolean = false,
-        subtitleLang: String? = null
+        subtitleLang: String? = null,
+        speedLimitBytes: Long = 0L,
+        subtitleDelivery: String = "embed",
+        subtitleFormat: String = "srt"
     ): DownloadResult = withContext(Dispatchers.IO) {
         try {
             val pyCallback: Any? = callback?.let { cb ->
@@ -274,29 +322,44 @@ class PythonBridge private constructor(private val appContext: Context) {
                 }
             }
 
+            val effectiveFormatId = normalizeFormatId(formatId, audioCodec != null)
+
             val jsonStr = bridgeModule.callAttr(
                 "download_media",
                 taskId,
                 url,
-                formatId,
+                effectiveFormatId,
                 outputDir.absolutePath,
                 pyCallback,
                 audioCodec,
                 embedSubtitles,
-                subtitleLang
+                subtitleLang,
+                speedLimitBytes,
+                subtitleDelivery,
+                subtitleFormat
             ).toString()
 
             val json = JSONObject(jsonStr)
             val status = json.optString("status")
 
             when (status) {
-                "ok" -> DownloadResult(
-                    isSuccess = true,
-                    isCancelled = false,
-                    filePath = json.optString("filepath"),
-                    fileName = json.optString("filename"),
-                    fileSize = json.optLong("filesize", 0L)
-                )
+                "ok" -> {
+                    val compJson = json.optJSONArray("companion_files")
+                    val companions = mutableListOf<String>()
+                    if (compJson != null) {
+                        for (i in 0 until compJson.length()) {
+                            companions.add(compJson.getString(i))
+                        }
+                    }
+                    DownloadResult(
+                        isSuccess = true,
+                        isCancelled = false,
+                        filePath = json.optString("filepath"),
+                        fileName = json.optString("filename"),
+                        fileSize = json.optLong("filesize", 0L),
+                        companionFiles = companions
+                    )
+                }
                 "cancelled" -> DownloadResult(
                     isSuccess = false,
                     isCancelled = true,

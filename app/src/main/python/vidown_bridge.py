@@ -138,14 +138,42 @@ def probe_info(url):
 
             subtitles = info.get("subtitles") or {}
             auto_captions = info.get("automatic_captions") or {}
-            all_sub_langs = sorted(list(set(list(subtitles.keys()) + list(auto_captions.keys()))))
-            has_subtitles = len(all_sub_langs) > 0
+
+            sub_tracks = []
+            seen_sub_codes = set()
+            for code, track_formats in subtitles.items():
+                if code not in seen_sub_codes:
+                    seen_sub_codes.add(code)
+                    t_name = ""
+                    if isinstance(track_formats, list) and track_formats:
+                        t_name = str(track_formats[0].get("name") or "")
+                    sub_tracks.append({
+                        "code": str(code),
+                        "name": t_name,
+                        "is_auto": False
+                    })
+
+            for code, track_formats in auto_captions.items():
+                if code not in seen_sub_codes:
+                    seen_sub_codes.add(code)
+                    t_name = ""
+                    if isinstance(track_formats, list) and track_formats:
+                        t_name = str(track_formats[0].get("name") or "")
+                    sub_tracks.append({
+                        "code": str(code),
+                        "name": t_name,
+                        "is_auto": True
+                    })
+
+            sub_tracks.sort(key=lambda t: (t["is_auto"], t["code"]))
+            all_sub_langs = [t["code"] for t in sub_tracks]
+            has_subtitles = len(sub_tracks) > 0
 
             formats = []
             formats.append({
-                "id": "b",
-                "label": "Best",
-                "note": "Fastest, single file without merging",
+                "id": "bestvideo*+bestaudio/best",
+                "label": "Best Quality",
+                "note": "Maximum video and audio quality",
                 "is_audio_only": False,
                 "audio_codec": None
             })
@@ -155,15 +183,17 @@ def probe_info(url):
             for f in raw_formats:
                 height = f.get("height")
                 vcodec = f.get("vcodec")
-                if height and vcodec != "none" and height not in seen_heights:
-                    seen_heights.add(height)
-                    formats.append({
-                        "id": f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/best",
-                        "label": f"{height}p Video",
-                        "note": f"Resolution up to {height}p with audio",
-                        "is_audio_only": False,
-                        "audio_codec": None
-                    })
+                if height and vcodec != "none":
+                    seen_heights.add(int(height))
+
+            for height in sorted(seen_heights, reverse=True):
+                formats.append({
+                    "id": f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/best",
+                    "label": f"{height}p Video",
+                    "note": f"Resolution up to {height}p with audio",
+                    "is_audio_only": False,
+                    "audio_codec": None
+                })
 
             formats.append({
                 "id": "bestaudio/m4a/bestaudio/best",
@@ -203,7 +233,8 @@ def probe_info(url):
                 "webpage_url": webpage_url,
                 "formats": formats,
                 "has_subtitles": has_subtitles,
-                "available_subtitles": all_sub_langs
+                "available_subtitles": all_sub_langs,
+                "subtitle_tracks": sub_tracks
             }
             return json.dumps({
                 "status": "ok",
@@ -218,7 +249,7 @@ def probe_info(url):
             "traceback": traceback.format_exc()
         })
 
-def download_media(task_id, url, format_id, out_dir, callback_obj, audio_codec=None, embed_subtitles=False, subtitle_lang=None):
+def download_media(task_id, url, format_id, out_dir, callback_obj, audio_codec=None, embed_subtitles=False, subtitle_lang=None, ratelimit=0, subtitle_delivery="embed", subtitle_format="srt"):
     task_id_str = str(task_id)
     if task_id_str in _CANCELLED_TASKS:
         _CANCELLED_TASKS.remove(task_id_str)
@@ -268,8 +299,12 @@ def download_media(task_id, url, format_id, out_dir, callback_obj, audio_codec=N
         os.makedirs(out_dir, exist_ok=True)
         outtmpl = os.path.join(out_dir, "%(title).100B [%(id)s].%(ext)s")
 
+        effective_format = (format_id or "").strip()
+        if not effective_format or effective_format in ("b", "best"):
+            effective_format = "bestaudio/best" if audio_codec else "bestvideo*+bestaudio/best"
+
         ydl_opts = {
-            "format": format_id or "b",
+            "format": effective_format,
             "outtmpl": outtmpl,
             "progress_hooks": [progress_hook],
             "postprocessor_hooks": [postprocessor_hook],
@@ -277,6 +312,9 @@ def download_media(task_id, url, format_id, out_dir, callback_obj, audio_codec=N
             "no_warnings": True,
             "noplaylist": True,
         }
+
+        if ratelimit and int(ratelimit) > 0:
+            ydl_opts["ratelimit"] = int(ratelimit)
 
         has_ffmpeg = bool(_CONFIG.get("ffmpeg_path") and os.path.exists(_CONFIG["ffmpeg_path"]))
         if has_ffmpeg:
@@ -291,18 +329,38 @@ def download_media(task_id, url, format_id, out_dir, callback_obj, audio_codec=N
                     "preferredquality": "0",
                 })
 
-            if embed_subtitles:
+            target_langs = []
+            if isinstance(subtitle_lang, list):
+                target_langs = [str(l).strip() for l in subtitle_lang if str(l).strip()]
+            elif isinstance(subtitle_lang, str) and subtitle_lang.strip():
+                target_langs = [l.strip() for l in subtitle_lang.split(",") if l.strip()]
+
+            delivery = str(subtitle_delivery or "embed").lower()
+            sub_fmt = str(subtitle_format or "srt").lower()
+            if sub_fmt not in ("srt", "vtt"):
+                sub_fmt = "srt"
+
+            has_subtitles_requested = embed_subtitles or bool(target_langs)
+
+            if has_subtitles_requested:
                 ydl_opts["writesubtitles"] = True
                 ydl_opts["writeautomaticsub"] = True
-                if subtitle_lang:
-                    ydl_opts["subtitleslangs"] = [subtitle_lang]
+                if target_langs:
+                    ydl_opts["subtitleslangs"] = target_langs
                 else:
                     ydl_opts["subtitleslangs"] = ["en"]
-                postprocessors.append({
-                    "key": "FFmpegEmbedSubtitle",
-                    "already_have_subtitle": False,
-                })
-                ydl_opts["merge_output_format"] = "mp4"
+
+                if delivery == "embed" and not audio_codec:
+                    postprocessors.append({
+                        "key": "FFmpegEmbedSubtitle",
+                        "already_have_subtitle": False,
+                    })
+                    ydl_opts["merge_output_format"] = "mp4"
+                else:
+                    postprocessors.append({
+                        "key": "FFmpegSubtitlesConvertor",
+                        "format": sub_fmt,
+                    })
 
             ydl_opts["writethumbnail"] = True
             postprocessors.append({
@@ -349,11 +407,19 @@ def download_media(task_id, url, format_id, out_dir, callback_obj, audio_codec=N
                 downloaded_filepath = max(files, key=os.path.getmtime)
 
         if downloaded_filepath and os.path.exists(downloaded_filepath):
+            companion_files = []
+            for f in os.listdir(out_dir):
+                if f.endswith(".srt") or f.endswith(".vtt"):
+                    full_p = os.path.join(out_dir, f)
+                    if os.path.exists(full_p):
+                        companion_files.append(full_p)
+
             return json.dumps({
                 "status": "ok",
                 "filepath": downloaded_filepath,
                 "filename": os.path.basename(downloaded_filepath),
-                "filesize": os.path.getsize(downloaded_filepath)
+                "filesize": os.path.getsize(downloaded_filepath),
+                "companion_files": companion_files
             })
         else:
             return json.dumps({"status": "error", "error": "Output file not found after download completion"})

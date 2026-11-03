@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.0.2] - 2026-11-03
 
 ### Added
 
@@ -18,6 +18,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Custom storage directory selection via Storage Access Framework (`ACTION_OPEN_DOCUMENT_TREE`) supporting internal folders and external SD cards.
 - Optional creator and channel subfolder organization for media files.
 - Resilient storage fallback to standard MediaStore when custom directories are unmounted or inaccessible.
+- Network constraints with configurable "Download only over Wi-Fi" policy and dynamic download speed limiting (unlimited, presets, or custom byte limits).
+- Automatic download pause on cellular network transitions with automatic resume upon unmetered Wi-Fi reconnection.
+- Visual "Waiting for Wi-Fi" status banner on the download queue screen.
+- Animated fullscreen sub-section navigation in Settings with smooth bottom navigation bar slide and fade transitions.
+- Subtitle extraction and multi-language selection supporting multiple concurrent tracks.
+- Dual subtitle delivery modes: soft-embedding into video containers (`FFmpegEmbedSubtitle`) or saving standalone companion `.srt` / `.vtt` files (`FFmpegSubtitlesConvertor`) alongside media in MediaStore and SAF directories.
+- Interactive `SubtitleSelectionSheet` modal with search filtering, manual vs auto-caption grouping, and multi-select language checkboxes.
+- Global subtitle defaults in Settings for preferred delivery mode, standalone subtitle format, and auto-generated captions toggle.
+- Batch subtitle delivery mode configuration in Playlist download sheet.
+- Automatic startup pruning of orphaned temporary download directories preserving active and paused resume streams.
+- In-app cache calculation and manual cache purge action in Settings Storage & Downloads.
+- Storage hygiene unit test suite covering inactive directory pruning and storage byte formatting.
+
+### Removed
+
+- Stock template unit test and unused code artifacts.
+
+### Fixed
+
+- Resolved YouTube download failures caused by `-f b` (`Requested format is not available`) by replacing legacy single-stream selector with standard adaptive stream merging (`bestvideo*+bestaudio/best`), with automatic format normalization across the database, bridge, and background worker service.
+- Video format selector listing updated to descending resolution hierarchy (highest resolution first).
 
 ## [0.0.1] - 2026-11-02
 

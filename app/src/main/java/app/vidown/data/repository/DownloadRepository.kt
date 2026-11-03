@@ -1,6 +1,8 @@
 package app.vidown.data.repository
 
 import android.content.Context
+import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
 import app.vidown.data.db.DownloadDatabase
 import app.vidown.data.model.DownloadStatus
 import app.vidown.data.model.DownloadTask
@@ -13,10 +15,12 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.io.File
 
 class DownloadRepository private constructor(context: Context) {
 
-    private val db = DownloadDatabase(context.applicationContext)
+    private val appContext = context.applicationContext
+    private val db = DownloadDatabase(appContext)
     private val scope = CoroutineScope(Dispatchers.IO)
     private val mutex = Mutex()
 
@@ -128,10 +132,42 @@ class DownloadRepository private constructor(context: Context) {
         }
     }
 
-    suspend fun deleteTask(taskId: String) {
+    suspend fun deleteTask(taskId: String, deleteFiles: Boolean = false) {
+        deleteTasks(listOf(taskId), deleteFiles)
+    }
+
+    suspend fun deleteTasks(taskIds: Collection<String>, deleteFiles: Boolean = false) {
+        if (taskIds.isEmpty()) return
         mutex.withLock {
-            db.deleteTask(taskId)
-            _tasksFlow.value = _tasksFlow.value.filter { it.id != taskId }
+            if (deleteFiles) {
+                val targets = _tasksFlow.value.filter { it.id in taskIds }
+                for (task in targets) {
+                    deletePhysicalMedia(task)
+                }
+            }
+            db.deleteTasks(taskIds)
+            _tasksFlow.value = _tasksFlow.value.filter { it.id !in taskIds }
+        }
+    }
+
+    private fun deletePhysicalMedia(task: DownloadTask) {
+        task.mediaStoreUri?.let { uriStr ->
+            try {
+                val uri = Uri.parse(uriStr)
+                if (uri.scheme == "content") {
+                    val deleted = appContext.contentResolver.delete(uri, null, null)
+                    if (deleted <= 0 && DocumentFile.isDocumentUri(appContext, uri)) {
+                        DocumentFile.fromSingleUri(appContext, uri)?.delete()
+                    }
+                } else if (uri.scheme == "file") {
+                    uri.path?.let { File(it).delete() }
+                }
+            } catch (_: Exception) {}
+        }
+        task.localFilePath?.let { path ->
+            try {
+                File(path).delete()
+            } catch (_: Exception) {}
         }
     }
 

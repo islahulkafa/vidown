@@ -2,6 +2,17 @@ package app.vidown.ui.screens
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.togetherWith
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -32,10 +43,12 @@ import com.adamglin.phosphoricons.regular.TerminalWindow
 import com.adamglin.phosphoricons.regular.Trash
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -78,6 +91,8 @@ enum class SettingsSubSection {
 @Composable
 fun SettingsRoute(
     viewModel: MainViewModel,
+    bottomBarPadding: Dp = 80.dp,
+    onSubSectionChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val ytdlpVersion by viewModel.ytdlpVersion.collectAsStateWithLifecycle()
@@ -89,63 +104,113 @@ fun SettingsRoute(
     val useCustomStorage by viewModel.useCustomStorage.collectAsStateWithLifecycle()
     val customStorageUri by viewModel.customStorageUri.collectAsStateWithLifecycle()
     val organizeByCreator by viewModel.organizeByCreator.collectAsStateWithLifecycle()
+    val downloadOnlyOnWifi by viewModel.downloadOnlyOnWifi.collectAsStateWithLifecycle()
+    val downloadSpeedLimitBytes by viewModel.downloadSpeedLimitBytes.collectAsStateWithLifecycle()
+    val defaultSubtitleDeliveryMode by viewModel.defaultSubtitleDeliveryMode.collectAsStateWithLifecycle()
+    val defaultSubtitleFormat by viewModel.defaultSubtitleFormat.collectAsStateWithLifecycle()
+    val includeAutoCaptions by viewModel.includeAutoCaptions.collectAsStateWithLifecycle()
+    val cacheSizeBytes by viewModel.cacheSizeBytes.collectAsStateWithLifecycle()
 
     var currentSection by rememberSaveable { mutableStateOf(SettingsSubSection.MAIN) }
 
-    if (currentSection != SettingsSubSection.MAIN) {
-        BackHandler { currentSection = SettingsSubSection.MAIN }
+    fun updateSection(newSection: SettingsSubSection) {
+        currentSection = newSection
+        onSubSectionChange(newSection != SettingsSubSection.MAIN)
     }
 
-    when (currentSection) {
-        SettingsSubSection.MAIN -> {
-            SettingsMainScreen(
-                ytdlpVersion = ytdlpVersion,
-                cookieSummary = cookieSummary,
-                onNavigateToSection = { currentSection = it },
-                modifier = modifier
-            )
-        }
-        SettingsSubSection.ENGINE -> {
-            EngineSettingsScreen(
-                ytdlpVersion = ytdlpVersion,
-                isUpdating = isUpdating,
-                updateMessage = updateMessage,
-                onCheckUpdate = viewModel::checkYtdlpUpdate,
-                onBack = { currentSection = SettingsSubSection.MAIN },
-                modifier = modifier
-            )
-        }
-        SettingsSubSection.DOWNLOADS -> {
-            DownloadsSettingsScreen(
-                maxConcurrentDownloads = maxConcurrentDownloads,
-                onSetMaxConcurrentDownloads = viewModel::setMaxConcurrentDownloads,
-                useCustomStorage = useCustomStorage,
-                onToggleUseCustomStorage = viewModel::setUseCustomStorage,
-                customStorageUri = customStorageUri,
-                onSelectCustomFolder = viewModel::setCustomStorage,
-                organizeByCreator = organizeByCreator,
-                onToggleOrganizeByCreator = viewModel::setOrganizeByCreator,
-                onBack = { currentSection = SettingsSubSection.MAIN },
-                modifier = modifier
-            )
-        }
-        SettingsSubSection.COOKIES -> {
-            CookiesSettingsScreen(
-                cookieSummary = cookieSummary,
-                useCookies = useCookies,
-                onToggleUseCookies = viewModel::toggleUseCookies,
-                onImportFile = { uri -> viewModel.importCookieFile(uri) { _, _ -> } },
-                onImportText = { text -> viewModel.importCookieText(text) { _, _ -> } },
-                onClearCookies = viewModel::clearCookies,
-                onBack = { currentSection = SettingsSubSection.MAIN },
-                modifier = modifier
-            )
-        }
-        SettingsSubSection.ABOUT -> {
-            AboutSettingsScreen(
-                onBack = { currentSection = SettingsSubSection.MAIN },
-                modifier = modifier
-            )
+    LaunchedEffect(currentSection) {
+        onSubSectionChange(currentSection != SettingsSubSection.MAIN)
+    }
+
+    if (currentSection != SettingsSubSection.MAIN) {
+        BackHandler { updateSection(SettingsSubSection.MAIN) }
+    }
+
+    AnimatedContent(
+        targetState = currentSection,
+        transitionSpec = {
+            if (targetState != SettingsSubSection.MAIN) {
+                (slideInHorizontally(animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing)) { width -> width } +
+                    fadeIn(animationSpec = tween(durationMillis = 200)))
+                    .togetherWith(
+                        slideOutHorizontally(animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing)) { width -> -width / 4 } +
+                            fadeOut(animationSpec = tween(durationMillis = 150))
+                    )
+            } else {
+                (slideInHorizontally(animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing)) { width -> -width / 4 } +
+                    fadeIn(animationSpec = tween(durationMillis = 200)))
+                    .togetherWith(
+                        slideOutHorizontally(animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing)) { width -> width } +
+                            fadeOut(animationSpec = tween(durationMillis = 150))
+                    )
+            }
+        },
+        contentAlignment = Alignment.TopStart,
+        label = "settings_subsections"
+    ) { section ->
+        when (section) {
+            SettingsSubSection.MAIN -> {
+                SettingsMainScreen(
+                    ytdlpVersion = ytdlpVersion,
+                    cookieSummary = cookieSummary,
+                    onNavigateToSection = { updateSection(it) },
+                    modifier = modifier.padding(bottom = bottomBarPadding)
+                )
+            }
+            SettingsSubSection.ENGINE -> {
+                EngineSettingsScreen(
+                    ytdlpVersion = ytdlpVersion,
+                    isUpdating = isUpdating,
+                    updateMessage = updateMessage,
+                    onCheckUpdate = viewModel::checkYtdlpUpdate,
+                    onBack = { updateSection(SettingsSubSection.MAIN) },
+                    modifier = modifier
+                )
+            }
+            SettingsSubSection.DOWNLOADS -> {
+                DownloadsSettingsScreen(
+                    maxConcurrentDownloads = maxConcurrentDownloads,
+                    onSetMaxConcurrentDownloads = viewModel::setMaxConcurrentDownloads,
+                    useCustomStorage = useCustomStorage,
+                    onToggleUseCustomStorage = viewModel::setUseCustomStorage,
+                    customStorageUri = customStorageUri,
+                    onSelectCustomFolder = viewModel::setCustomStorage,
+                    organizeByCreator = organizeByCreator,
+                    onToggleOrganizeByCreator = viewModel::setOrganizeByCreator,
+                    downloadOnlyOnWifi = downloadOnlyOnWifi,
+                    onToggleDownloadOnlyOnWifi = viewModel::setDownloadOnlyOnWifi,
+                    downloadSpeedLimitBytes = downloadSpeedLimitBytes,
+                    onSetDownloadSpeedLimitBytes = viewModel::setDownloadSpeedLimitBytes,
+                    defaultSubtitleDeliveryMode = defaultSubtitleDeliveryMode,
+                    onSetDefaultSubtitleDeliveryMode = viewModel::setDefaultSubtitleDeliveryMode,
+                    defaultSubtitleFormat = defaultSubtitleFormat,
+                    onSetDefaultSubtitleFormat = viewModel::setDefaultSubtitleFormat,
+                    includeAutoCaptions = includeAutoCaptions,
+                    onToggleIncludeAutoCaptions = viewModel::setIncludeAutoCaptions,
+                    cacheSizeBytes = cacheSizeBytes,
+                    onClearCache = viewModel::clearAppCache,
+                    onBack = { updateSection(SettingsSubSection.MAIN) },
+                    modifier = modifier
+                )
+            }
+            SettingsSubSection.COOKIES -> {
+                CookiesSettingsScreen(
+                    cookieSummary = cookieSummary,
+                    useCookies = useCookies,
+                    onToggleUseCookies = viewModel::toggleUseCookies,
+                    onImportFile = { uri -> viewModel.importCookieFile(uri) { _, _ -> } },
+                    onImportText = { text -> viewModel.importCookieText(text) { _, _ -> } },
+                    onClearCookies = viewModel::clearCookies,
+                    onBack = { updateSection(SettingsSubSection.MAIN) },
+                    modifier = modifier
+                )
+            }
+            SettingsSubSection.ABOUT -> {
+                AboutSettingsScreen(
+                    onBack = { updateSection(SettingsSubSection.MAIN) },
+                    modifier = modifier
+                )
+            }
         }
     }
 }
@@ -401,9 +466,24 @@ fun DownloadsSettingsScreen(
     onSelectCustomFolder: (Uri) -> Unit,
     organizeByCreator: Boolean,
     onToggleOrganizeByCreator: (Boolean) -> Unit,
+    downloadOnlyOnWifi: Boolean,
+    onToggleDownloadOnlyOnWifi: (Boolean) -> Unit,
+    downloadSpeedLimitBytes: Long,
+    onSetDownloadSpeedLimitBytes: (Long) -> Unit,
+    defaultSubtitleDeliveryMode: String = "embed",
+    onSetDefaultSubtitleDeliveryMode: (String) -> Unit = {},
+    defaultSubtitleFormat: String = "srt",
+    onSetDefaultSubtitleFormat: (String) -> Unit = {},
+    includeAutoCaptions: Boolean = true,
+    onToggleIncludeAutoCaptions: (Boolean) -> Unit = {},
+    cacheSizeBytes: Long = 0L,
+    onClearCache: () -> Unit = {},
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var showCustomSpeedDialog by remember { mutableStateOf(false) }
+    var customSpeedInput by remember { mutableStateOf("") }
+    var customSpeedIsMb by remember { mutableStateOf(true) }
     val folderPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
@@ -479,6 +559,137 @@ fun DownloadsSettingsScreen(
                                     )
                                 )
                             }
+                        }
+                    }
+                }
+            }
+
+            item(key = "wifi_constraint_card") {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer
+                    ),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Download over Wi-Fi only",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Automatically pauses downloads when connected to mobile cellular data.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Switch(
+                            checked = downloadOnlyOnWifi,
+                            onCheckedChange = onToggleDownloadOnlyOnWifi
+                        )
+                    }
+                }
+            }
+
+            item(key = "speed_limit_card") {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer
+                    ),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "Download Speed Limit",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Throttle transfer rate to save bandwidth for other apps and devices.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        val presetsRow1 = listOf(
+                            0L to "Unlimited",
+                            1_048_576L to "1 MB/s",
+                            2_097_152L to "2 MB/s"
+                        )
+                        val presetsRow2 = listOf(
+                            5_242_880L to "5 MB/s",
+                            10_485_760L to "10 MB/s"
+                        )
+                        val isCustom = downloadSpeedLimitBytes > 0L &&
+                            presetsRow1.none { it.first == downloadSpeedLimitBytes } &&
+                            presetsRow2.none { it.first == downloadSpeedLimitBytes }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            presetsRow1.forEach { (bytes, label) ->
+                                FilterChip(
+                                    selected = downloadSpeedLimitBytes == bytes,
+                                    onClick = { onSetDownloadSpeedLimitBytes(bytes) },
+                                    label = { Text(label) },
+                                    modifier = Modifier.weight(1f),
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                        selectedLabelColor = MaterialTheme.colorScheme.onSurface
+                                    )
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            presetsRow2.forEach { (bytes, label) ->
+                                FilterChip(
+                                    selected = downloadSpeedLimitBytes == bytes,
+                                    onClick = { onSetDownloadSpeedLimitBytes(bytes) },
+                                    label = { Text(label) },
+                                    modifier = Modifier.weight(1f),
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                        selectedLabelColor = MaterialTheme.colorScheme.onSurface
+                                    )
+                                )
+                            }
+                            FilterChip(
+                                selected = isCustom,
+                                onClick = { showCustomSpeedDialog = true },
+                                label = {
+                                    Text(
+                                        if (isCustom) {
+                                            formatSpeedBytes(downloadSpeedLimitBytes)
+                                        } else {
+                                            "Custom"
+                                        }
+                                    )
+                                },
+                                modifier = Modifier.weight(1f),
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onSurface
+                                )
+                            )
                         }
                     }
                 }
@@ -611,7 +822,268 @@ fun DownloadsSettingsScreen(
                     }
                 }
             }
+
+            item(key = "subtitles_settings_card") {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer
+                    ),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "Subtitles",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Default delivery mode and format for downloaded subtitles.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        Text(
+                            text = "Default Delivery Mode",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilterChip(
+                                selected = defaultSubtitleDeliveryMode == "embed",
+                                onClick = { onSetDefaultSubtitleDeliveryMode("embed") },
+                                label = { Text("Soft-Embed (in video)") },
+                                modifier = Modifier.weight(1f),
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onSurface
+                                )
+                            )
+                            FilterChip(
+                                selected = defaultSubtitleDeliveryMode == "external",
+                                onClick = { onSetDefaultSubtitleDeliveryMode("external") },
+                                label = { Text("External File") },
+                                modifier = Modifier.weight(1f),
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onSurface
+                                )
+                            )
+                        }
+
+                        if (defaultSubtitleDeliveryMode == "external") {
+                            Text(
+                                text = "External File Format",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                FilterChip(
+                                    selected = defaultSubtitleFormat == "srt",
+                                    onClick = { onSetDefaultSubtitleFormat("srt") },
+                                    label = { Text(".SRT (SubRip)") },
+                                    modifier = Modifier.weight(1f),
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                        selectedLabelColor = MaterialTheme.colorScheme.onSurface
+                                    )
+                                )
+                                FilterChip(
+                                    selected = defaultSubtitleFormat == "vtt",
+                                    onClick = { onSetDefaultSubtitleFormat("vtt") },
+                                    label = { Text(".VTT (WebVTT)") },
+                                    modifier = Modifier.weight(1f),
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                        selectedLabelColor = MaterialTheme.colorScheme.onSurface
+                                    )
+                                )
+                            }
+                        }
+
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Include auto-generated captions",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Lists and allows downloading speech-to-text captions when available.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Switch(
+                                checked = includeAutoCaptions,
+                                onCheckedChange = onToggleIncludeAutoCaptions
+                            )
+                        }
+                    }
+                }
+            }
+
+            item(key = "cache_management_card") {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer
+                    ),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Temporary Cache",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Image previews and temporary stream download data.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Text(
+                                text = formatStorageBytes(cacheSizeBytes),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        Button(
+                            onClick = onClearCache,
+                            enabled = cacheSizeBytes > 0L,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                contentColor = MaterialTheme.colorScheme.onSurface
+                            )
+                        ) {
+                            Icon(
+                                imageVector = PhosphorIcons.Regular.Trash,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Clear Cache")
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    if (showCustomSpeedDialog) {
+        AlertDialog(
+            onDismissRequest = { showCustomSpeedDialog = false },
+            title = {
+                Text(text = "Custom Speed Limit", fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = "Enter maximum download speed (0 for unlimited).",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    OutlinedTextField(
+                        value = customSpeedInput,
+                        onValueChange = { customSpeedInput = it.filter { ch -> ch.isDigit() } },
+                        label = { Text("Speed Limit") },
+                        placeholder = { Text("e.g. 5") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = customSpeedIsMb,
+                            onClick = { customSpeedIsMb = true },
+                            label = { Text("MB/s") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        FilterChip(
+                            selected = !customSpeedIsMb,
+                            onClick = { customSpeedIsMb = false },
+                            label = { Text("KB/s") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                FilledTonalButton(
+                    onClick = {
+                        val num = customSpeedInput.toLongOrNull() ?: 0L
+                        val multiplier = if (customSpeedIsMb) 1024L * 1024L else 1024L
+                        val totalBytes = if (num <= 0) 0L else num * multiplier
+                        onSetDownloadSpeedLimitBytes(totalBytes)
+                        showCustomSpeedDialog = false
+                    }
+                ) {
+                    Text("Apply")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCustomSpeedDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
+
+private fun formatStorageBytes(bytes: Long): String {
+    return when {
+        bytes <= 0L -> "0 B"
+        bytes >= 1024L * 1024L * 1024L -> String.format(java.util.Locale.US, "%.1f GB", bytes.toDouble() / (1024L * 1024L * 1024L))
+        bytes >= 1024L * 1024L -> String.format(java.util.Locale.US, "%.1f MB", bytes.toDouble() / (1024L * 1024L))
+        bytes >= 1024L -> String.format(java.util.Locale.US, "%.0f KB", bytes.toDouble() / 1024L)
+        else -> "$bytes B"
+    }
+}
+
+private fun formatSpeedBytes(bytes: Long): String {
+    return when {
+        bytes <= 0L -> "Unlimited"
+        bytes >= 1024L * 1024L -> "${bytes / (1024L * 1024L)} MB/s"
+        else -> "${bytes / 1024L} KB/s"
     }
 }
 

@@ -7,6 +7,10 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
@@ -37,9 +41,12 @@ class DownloadService : Service() {
     private lateinit var pythonBridge: PythonBridge
     private lateinit var appPreferences: AppPreferences
     private lateinit var notificationManager: NotificationManager
+    private lateinit var connectivityManager: ConnectivityManager
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     private val activeJobs = ConcurrentHashMap<String, Job>()
     private val pausedTaskIds = ConcurrentHashMap.newKeySet<String>()
+    private val wifiWaitingTaskIds = ConcurrentHashMap.newKeySet<String>()
     private var isRunningQueue = false
 
     override fun onCreate() {
@@ -48,7 +55,9 @@ class DownloadService : Service() {
         pythonBridge = PythonBridge.getInstance(this)
         appPreferences = AppPreferences.getInstance(this)
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         createNotificationChannels()
+        registerNetworkCallback()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -115,6 +124,27 @@ class DownloadService : Service() {
                     it.status == DownloadStatus.QUEUED && !activeJobs.containsKey(it.id)
                 }
 
+                if (appPreferences.isDownloadOnlyOnWifi() && !isUnmeteredOrWifiConnected()) {
+                    if (activeJobs.isNotEmpty()) {
+                        for (id in activeJobs.keys.toList()) {
+                            wifiWaitingTaskIds.add(id)
+                            pauseTask(id)
+                        }
+                    }
+                    if (queuedTasks.isNotEmpty()) {
+                        for (task in queuedTasks) {
+                            wifiWaitingTaskIds.add(task.id)
+                            repository.pauseTask(task.id)
+                        }
+                    }
+                    updateConsolidatedNotification()
+                    delay(2000)
+                    if (activeJobs.isEmpty()) {
+                        break
+                    }
+                    continue
+                }
+
                 if (activeJobs.isEmpty() && queuedTasks.isEmpty()) {
                     break
                 }
@@ -179,6 +209,7 @@ class DownloadService : Service() {
                 }
             }
 
+            val speedLimit = appPreferences.getDownloadSpeedLimitBytes()
             val result = pythonBridge.download(
                 taskId = taskId,
                 url = task.url,
@@ -187,7 +218,10 @@ class DownloadService : Service() {
                 callback = callback,
                 audioCodec = task.audioCodec,
                 embedSubtitles = task.embedSubtitles,
-                subtitleLang = task.subtitleLang
+                subtitleLang = task.subtitleLang,
+                speedLimitBytes = speedLimit,
+                subtitleDelivery = task.subtitleDeliveryMode,
+                subtitleFormat = task.subtitleFormat
             )
 
             if (result.isSuccess && result.filePath != null) {
@@ -203,6 +237,8 @@ class DownloadService : Service() {
                     null
                 }
 
+                val companionFiles = result.companionFiles.map { File(it) }.filter { it.exists() }
+
                 val savedUri = MediaStoreWriter.saveMediaFile(
                     context = this@DownloadService,
                     sourceFile = downloadedFile,
@@ -210,7 +246,8 @@ class DownloadService : Service() {
                     isAudioOnly = task.isAudioOnly,
                     uploader = task.uploader,
                     customStorageTreeUri = customTreeUri,
-                    organizeByCreator = appPreferences.isOrganizeByCreator()
+                    organizeByCreator = appPreferences.isOrganizeByCreator(),
+                    companionFiles = companionFiles
                 )
 
                 downloadedFile.delete()
@@ -310,6 +347,30 @@ class DownloadService : Service() {
     }
 
     private fun updateConsolidatedNotification() {
+        val isWaitingForWifi = appPreferences.isDownloadOnlyOnWifi() && !isUnmeteredOrWifiConnected() && (wifiWaitingTaskIds.isNotEmpty() || activeJobs.isNotEmpty())
+        if (isWaitingForWifi) {
+            val openIntent = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                this,
+                0,
+                openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val builder = NotificationCompat.Builder(this, CHANNEL_DOWNLOADS)
+                .setContentTitle("Vidown")
+                .setContentText("Waiting for Wi-Fi connection • Downloads paused")
+                .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setContentIntent(pendingIntent)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+
+            notificationManager.notify(NOTIFICATION_ID, builder.build())
+            return
+        }
+
         val runningIds = activeJobs.keys.toList()
         if (runningIds.isEmpty()) return
 
@@ -426,8 +487,87 @@ class DownloadService : Service() {
         return if (m > 0) "${m}m ${s}s" else "${s}s"
     }
 
+    private fun isUnmeteredOrWifiConnected(): Boolean {
+        val network = connectivityManager.activeNetwork ?: return false
+        val caps = connectivityManager.getNetworkCapabilities(network) ?: return false
+        return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+    }
+
+    private fun registerNetworkCallback() {
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                checkAndResumeOnWifi()
+            }
+
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                val isWifiOrUnmetered = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+                if (isWifiOrUnmetered) {
+                    checkAndResumeOnWifi()
+                } else if (appPreferences.isDownloadOnlyOnWifi()) {
+                    checkAndPauseForWifi()
+                }
+            }
+
+            override fun onLost(network: Network) {
+                if (appPreferences.isDownloadOnlyOnWifi()) {
+                    checkAndPauseForWifi()
+                }
+            }
+        }
+        networkCallback = callback
+        try {
+            connectivityManager.registerNetworkCallback(request, callback)
+        } catch (_: Exception) {}
+    }
+
+    private fun unregisterNetworkCallback() {
+        networkCallback?.let {
+            try {
+                connectivityManager.unregisterNetworkCallback(it)
+            } catch (_: Exception) {}
+        }
+        networkCallback = null
+    }
+
+    private fun checkAndPauseForWifi() {
+        if (!appPreferences.isDownloadOnlyOnWifi()) return
+        if (isUnmeteredOrWifiConnected()) return
+
+        serviceScope.launch {
+            val activeIds = activeJobs.keys.toList()
+            for (id in activeIds) {
+                wifiWaitingTaskIds.add(id)
+                pauseTask(id)
+            }
+            updateConsolidatedNotification()
+        }
+    }
+
+    private fun checkAndResumeOnWifi() {
+        if (!appPreferences.isDownloadOnlyOnWifi()) return
+        if (!isUnmeteredOrWifiConnected()) return
+
+        serviceScope.launch {
+            val toResume = wifiWaitingTaskIds.toList()
+            wifiWaitingTaskIds.clear()
+            for (id in toResume) {
+                repository.resumeTask(id)
+            }
+            if (toResume.isNotEmpty()) {
+                triggerQueueProcessing()
+            }
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        unregisterNetworkCallback()
         serviceScope.cancel()
     }
 

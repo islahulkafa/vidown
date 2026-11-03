@@ -22,6 +22,7 @@ import com.adamglin.phosphoricons.regular.DownloadSimple
 import com.adamglin.phosphoricons.regular.Hourglass
 import com.adamglin.phosphoricons.regular.Pause
 import com.adamglin.phosphoricons.regular.Play
+import com.adamglin.phosphoricons.regular.WifiSlash
 import com.adamglin.phosphoricons.regular.X
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -55,9 +56,13 @@ fun QueueRoute(
     modifier: Modifier = Modifier
 ) {
     val activeTasks by viewModel.activeTasks.collectAsStateWithLifecycle()
+    val downloadOnlyOnWifi by viewModel.downloadOnlyOnWifi.collectAsStateWithLifecycle()
+    val isWifiConnected by viewModel.isWifiConnected.collectAsStateWithLifecycle()
 
     QueueScreen(
         activeTasks = activeTasks,
+        downloadOnlyOnWifi = downloadOnlyOnWifi,
+        isWifiConnected = isWifiConnected,
         onCancelTask = viewModel::cancelTask,
         onPauseTask = viewModel::pauseTask,
         onResumeTask = viewModel::resumeTask,
@@ -70,6 +75,8 @@ fun QueueRoute(
 @Composable
 fun QueueScreen(
     activeTasks: List<DownloadTask>,
+    downloadOnlyOnWifi: Boolean = false,
+    isWifiConnected: Boolean = true,
     onCancelTask: (String) -> Unit,
     onPauseTask: (String) -> Unit,
     onResumeTask: (String) -> Unit,
@@ -149,6 +156,42 @@ fun QueueScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                if (downloadOnlyOnWifi && !isWifiConnected) {
+                    item(key = "wifi_warning_banner") {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = PhosphorIcons.Regular.WifiSlash,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.outline
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = "Waiting for Wi-Fi",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "Downloads paused on mobile data. Reconnect to Wi-Fi to resume.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 items(
                     items = activeTasks,
                     key = { it.id }

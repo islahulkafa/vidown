@@ -23,7 +23,8 @@ object MediaStoreWriter {
         isAudioOnly: Boolean,
         uploader: String = "",
         customStorageTreeUri: Uri? = null,
-        organizeByCreator: Boolean = false
+        organizeByCreator: Boolean = false,
+        companionFiles: List<File> = emptyList()
     ): Uri? = withContext(Dispatchers.IO) {
         if (!sourceFile.exists()) return@withContext null
 
@@ -35,14 +36,15 @@ object MediaStoreWriter {
                 isAudioOnly = isAudioOnly,
                 uploader = uploader,
                 treeUri = customStorageTreeUri,
-                organizeByCreator = organizeByCreator
+                organizeByCreator = organizeByCreator,
+                companionFiles = companionFiles
             )
             if (safResult != null) {
                 return@withContext safResult
             }
         }
 
-        saveToMediaStore(context, sourceFile, fileName, isAudioOnly)
+        saveToMediaStore(context, sourceFile, fileName, isAudioOnly, companionFiles)
     }
 
     private fun saveToSafTree(
@@ -52,7 +54,8 @@ object MediaStoreWriter {
         isAudioOnly: Boolean,
         uploader: String,
         treeUri: Uri,
-        organizeByCreator: Boolean
+        organizeByCreator: Boolean,
+        companionFiles: List<File> = emptyList()
     ): Uri? {
         return try {
             val rootDoc = DocumentFile.fromTreeUri(context, treeUri)
@@ -88,6 +91,25 @@ object MediaStoreWriter {
                 }
             } ?: return null
 
+            for (comp in companionFiles) {
+                if (comp.exists()) {
+                    val compName = comp.name
+                    val compMime = resolveMimeType(compName, false)
+                    val existingComp = targetDir.findFile(compName)
+                    if (existingComp != null && existingComp.isFile) {
+                        existingComp.delete()
+                    }
+                    val compDoc = targetDir.createFile(compMime, compName)
+                    if (compDoc != null) {
+                        context.contentResolver.openOutputStream(compDoc.uri)?.use { outStream ->
+                            FileInputStream(comp).use { inStream ->
+                                inStream.copyTo(outStream, bufferSize = 64 * 1024)
+                            }
+                        }
+                    }
+                }
+            }
+
             targetDoc.uri
         } catch (e: Exception) {
             null
@@ -102,7 +124,8 @@ object MediaStoreWriter {
         context: Context,
         sourceFile: File,
         fileName: String,
-        isAudioOnly: Boolean
+        isAudioOnly: Boolean,
+        companionFiles: List<File> = emptyList()
     ): Uri? {
         val mimeType = resolveMimeType(fileName, isAudioOnly)
 
@@ -138,6 +161,31 @@ object MediaStoreWriter {
                 contentValues.clear()
                 contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
                 resolver.update(uri, contentValues, null, null)
+
+                for (comp in companionFiles) {
+                    if (comp.exists()) {
+                        val compValues = ContentValues().apply {
+                            put(MediaStore.MediaColumns.DISPLAY_NAME, comp.name)
+                            put(MediaStore.MediaColumns.MIME_TYPE, resolveMimeType(comp.name, false))
+                            put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                            put(MediaStore.MediaColumns.IS_PENDING, 1)
+                        }
+                        val compUri = resolver.insert(MediaStore.Files.getContentUri("external"), compValues)
+                        if (compUri != null) {
+                            try {
+                                resolver.openOutputStream(compUri)?.use { out ->
+                                    FileInputStream(comp).use { inp -> inp.copyTo(out, bufferSize = 64 * 1024) }
+                                }
+                                compValues.clear()
+                                compValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                                resolver.update(compUri, compValues, null, null)
+                            } catch (_: Exception) {
+                                resolver.delete(compUri, null, null)
+                            }
+                        }
+                    }
+                }
+
                 uri
             } catch (e: Exception) {
                 resolver.delete(uri, null, null)
@@ -181,6 +229,8 @@ object MediaStoreWriter {
             "opus" -> "audio/opus"
             "aac" -> "audio/aac"
             "flac" -> "audio/flac"
+            "srt" -> "application/x-subrip"
+            "vtt" -> "text/vtt"
             else -> if (isAudioOnly) "audio/*" else "video/*"
         }
     }

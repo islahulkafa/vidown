@@ -1,6 +1,7 @@
 package app.vidown
 
 import app.vidown.python.MediaFormat
+import app.vidown.python.normalizeFormatId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -9,15 +10,25 @@ import org.junit.Test
 class FormatSelectorTest {
 
     @Test
-    fun defaultFormat_containsBestSingleStream() {
+    fun defaultFormat_containsBestStream() {
         val format = MediaFormat(
-            id = "b",
-            label = "Best",
-            note = "Fastest, single file without merging",
+            id = "bestvideo*+bestaudio/best",
+            label = "Best Quality",
+            note = "Maximum video and audio quality",
             isAudioOnly = false
         )
-        assertEquals("b", format.id)
+        assertEquals("bestvideo*+bestaudio/best", format.id)
         assertFalse(format.isAudioOnly)
+    }
+
+    @Test
+    fun normalizeFormatId_upgradesLegacyBestSelectors() {
+        assertEquals("bestvideo*+bestaudio/best", normalizeFormatId("b", isAudioOnly = false))
+        assertEquals("bestvideo*+bestaudio/best", normalizeFormatId("best", isAudioOnly = false))
+        assertEquals("bestvideo*+bestaudio/best", normalizeFormatId("", isAudioOnly = false))
+        assertEquals("bestaudio/best", normalizeFormatId("b", isAudioOnly = true))
+        assertEquals("bestaudio/best", normalizeFormatId("best", isAudioOnly = true))
+        assertEquals("bestvideo[height<=1080]+bestaudio/best", normalizeFormatId("bestvideo[height<=1080]+bestaudio/best", isAudioOnly = false))
     }
 
     @Test

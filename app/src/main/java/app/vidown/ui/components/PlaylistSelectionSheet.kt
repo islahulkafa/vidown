@@ -68,12 +68,14 @@ fun PlaylistSelectionSheet(
     selectedItemIds: Set<String>,
     selectedBatchPreset: BatchPreset,
     embedSubtitles: Boolean,
+    batchSubtitleDeliveryMode: String = "embed",
     onDismiss: () -> Unit,
     onToggleItem: (String) -> Unit,
     onSelectAll: () -> Unit,
     onDeselectAll: () -> Unit,
     onSelectPreset: (BatchPreset) -> Unit,
     onToggleSubtitles: (Boolean) -> Unit,
+    onSetSubtitleDeliveryMode: (String) -> Unit = {},
     onDownloadClicked: () -> Unit,
     modifier: Modifier = Modifier,
     sheetState: SheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -250,34 +252,67 @@ fun PlaylistSelectionSheet(
                         }
 
                         if (!isAudioMode) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { onToggleSubtitles(!embedSubtitles) }
-                                    .padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onToggleSubtitles(!embedSubtitles) }
+                                        .padding(vertical = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Icon(
-                                        imageVector = PhosphorIcons.Regular.Subtitles,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Text(
-                                        text = "Embed Subtitles (where available)",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurface
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = PhosphorIcons.Regular.Subtitles,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Text(
+                                            text = "Download Subtitles (where available)",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                    Switch(
+                                        checked = embedSubtitles,
+                                        onCheckedChange = onToggleSubtitles
                                     )
                                 }
-                                Switch(
-                                    checked = embedSubtitles,
-                                    onCheckedChange = onToggleSubtitles
-                                )
+
+                                if (embedSubtitles) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        FilterChip(
+                                            selected = batchSubtitleDeliveryMode == "embed",
+                                            onClick = { onSetSubtitleDeliveryMode("embed") },
+                                            label = { Text("Soft-Embed") },
+                                            modifier = Modifier.weight(1f),
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                                selectedLabelColor = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        )
+                                        FilterChip(
+                                            selected = batchSubtitleDeliveryMode == "external",
+                                            onClick = { onSetSubtitleDeliveryMode("external") },
+                                            label = { Text("External .srt") },
+                                            modifier = Modifier.weight(1f),
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                                selectedLabelColor = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

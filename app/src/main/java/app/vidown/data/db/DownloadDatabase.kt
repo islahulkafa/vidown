@@ -25,6 +25,8 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
                 $COL_AUDIO_CODEC TEXT,
                 $COL_EMBED_SUBTITLES INTEGER DEFAULT 0,
                 $COL_SUBTITLE_LANG TEXT,
+                $COL_SUBTITLE_DELIVERY_MODE TEXT DEFAULT 'embed',
+                $COL_SUBTITLE_FORMAT TEXT DEFAULT 'srt',
                 $COL_STATUS TEXT NOT NULL,
                 $COL_PROGRESS_PERCENT REAL,
                 $COL_SPEED_BYTES REAL,
@@ -49,7 +51,14 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
             } catch (e: Exception) {
                 db.execSQL("DROP TABLE IF EXISTS $TABLE_DOWNLOADS")
                 onCreate(db)
+                return
             }
+        }
+        if (oldVersion < 3) {
+            try {
+                db.execSQL("ALTER TABLE $TABLE_DOWNLOADS ADD COLUMN $COL_SUBTITLE_DELIVERY_MODE TEXT DEFAULT 'embed'")
+                db.execSQL("ALTER TABLE $TABLE_DOWNLOADS ADD COLUMN $COL_SUBTITLE_FORMAT TEXT DEFAULT 'srt'")
+            } catch (_: Exception) {}
         }
     }
 
@@ -76,6 +85,26 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
                 val subLangCol = c.getColumnIndex(COL_SUBTITLE_LANG)
                 val subtitleLang = if (subLangCol >= 0 && !c.isNull(subLangCol)) c.getString(subLangCol) else null
 
+                val subDeliveryCol = c.getColumnIndex(COL_SUBTITLE_DELIVERY_MODE)
+                val subtitleDeliveryMode = if (subDeliveryCol >= 0 && !c.isNull(subDeliveryCol)) c.getString(subDeliveryCol) else "embed"
+
+                val subFormatCol = c.getColumnIndex(COL_SUBTITLE_FORMAT)
+                val subtitleFormat = if (subFormatCol >= 0 && !c.isNull(subFormatCol)) c.getString(subFormatCol) else "srt"
+
+                val isAudio = c.getInt(c.getColumnIndexOrThrow(COL_IS_AUDIO_ONLY)) == 1
+                val rawFormatId = c.getString(c.getColumnIndexOrThrow(COL_FORMAT_ID)) ?: "bestvideo*+bestaudio/best"
+                val formatId = if (rawFormatId == "b" || rawFormatId == "best") {
+                    if (isAudio) "bestaudio/best" else "bestvideo*+bestaudio/best"
+                } else {
+                    rawFormatId
+                }
+                val rawFormatLabel = c.getString(c.getColumnIndexOrThrow(COL_FORMAT_LABEL)) ?: "Best Quality"
+                val formatLabel = if (rawFormatLabel == "Best" && (rawFormatId == "b" || rawFormatId == "best")) {
+                    "Best Quality"
+                } else {
+                    rawFormatLabel
+                }
+
                 list.add(
                     DownloadTask(
                         id = c.getString(c.getColumnIndexOrThrow(COL_ID)),
@@ -84,12 +113,14 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
                         thumbnailUrl = c.getString(c.getColumnIndexOrThrow(COL_THUMBNAIL_URL)) ?: "",
                         uploader = c.getString(c.getColumnIndexOrThrow(COL_UPLOADER)) ?: "",
                         durationSeconds = c.getLong(c.getColumnIndexOrThrow(COL_DURATION_SECONDS)),
-                        formatId = c.getString(c.getColumnIndexOrThrow(COL_FORMAT_ID)) ?: "b",
-                        formatLabel = c.getString(c.getColumnIndexOrThrow(COL_FORMAT_LABEL)) ?: "Best",
-                        isAudioOnly = c.getInt(c.getColumnIndexOrThrow(COL_IS_AUDIO_ONLY)) == 1,
+                        formatId = formatId,
+                        formatLabel = formatLabel,
+                        isAudioOnly = isAudio,
                         audioCodec = audioCodec,
                         embedSubtitles = embedSubtitles,
                         subtitleLang = subtitleLang,
+                        subtitleDeliveryMode = subtitleDeliveryMode,
+                        subtitleFormat = subtitleFormat,
                         status = DownloadStatus.valueOf(c.getString(c.getColumnIndexOrThrow(COL_STATUS))),
                         progressPercent = c.getFloat(c.getColumnIndexOrThrow(COL_PROGRESS_PERCENT)),
                         speedBytesPerSec = c.getDouble(c.getColumnIndexOrThrow(COL_SPEED_BYTES)),
@@ -122,6 +153,8 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
             put(COL_AUDIO_CODEC, task.audioCodec)
             put(COL_EMBED_SUBTITLES, if (task.embedSubtitles) 1 else 0)
             put(COL_SUBTITLE_LANG, task.subtitleLang)
+            put(COL_SUBTITLE_DELIVERY_MODE, task.subtitleDeliveryMode)
+            put(COL_SUBTITLE_FORMAT, task.subtitleFormat)
             put(COL_STATUS, task.status.name)
             put(COL_PROGRESS_PERCENT, task.progressPercent)
             put(COL_SPEED_BYTES, task.speedBytesPerSec)
@@ -178,9 +211,23 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
         writableDatabase.delete(TABLE_DOWNLOADS, "$COL_ID = ?", arrayOf(taskId))
     }
 
+    fun deleteTasks(taskIds: Collection<String>) {
+        if (taskIds.isEmpty()) return
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            for (id in taskIds) {
+                db.delete(TABLE_DOWNLOADS, "$COL_ID = ?", arrayOf(id))
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     companion object {
         const val DATABASE_NAME = "vidown.db"
-        const val DATABASE_VERSION = 2
+        const val DATABASE_VERSION = 3
 
         const val TABLE_DOWNLOADS = "downloads"
         const val COL_ID = "id"
@@ -195,6 +242,8 @@ class DownloadDatabase(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
         const val COL_AUDIO_CODEC = "audio_codec"
         const val COL_EMBED_SUBTITLES = "embed_subtitles"
         const val COL_SUBTITLE_LANG = "subtitle_lang"
+        const val COL_SUBTITLE_DELIVERY_MODE = "subtitle_delivery_mode"
+        const val COL_SUBTITLE_FORMAT = "subtitle_format"
         const val COL_STATUS = "status"
         const val COL_PROGRESS_PERCENT = "progress_percent"
         const val COL_SPEED_BYTES = "speed_bytes"

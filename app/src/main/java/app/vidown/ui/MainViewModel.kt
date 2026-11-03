@@ -1,7 +1,12 @@
 package app.vidown.ui
 
 import android.app.Application
+import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -19,13 +24,20 @@ import app.vidown.python.PlaylistProbeResult
 import app.vidown.python.ProbeData
 import app.vidown.python.ProbeResult
 import app.vidown.python.PythonBridge
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.io.File
 import java.util.UUID
+
+enum class HistoryFilter {
+    ALL, VIDEO, AUDIO, FAILED
+}
 
 sealed interface ProbeUiState {
     data object Idle : ProbeUiState
@@ -40,11 +52,16 @@ data class HomeUiState(
     val probeState: ProbeUiState = ProbeUiState.Idle,
     val selectedFormat: MediaFormat? = null,
     val embedSubtitles: Boolean = false,
-    val selectedSubtitleLang: String = "en",
+    val selectedSubtitleLangs: Set<String> = setOf("en"),
+    val subtitleDeliveryMode: String = "embed",
+    val subtitleFormat: String = "srt",
+    val isSubtitleSheetOpen: Boolean = false,
     val isStartingDownload: Boolean = false,
     val selectedPlaylistItems: Set<String> = emptySet(),
     val selectedBatchPreset: BatchPreset = DEFAULT_BATCH_PRESETS[0],
     val embedBatchSubtitles: Boolean = false,
+    val batchSubtitleLangs: Set<String> = setOf("en"),
+    val batchSubtitleDeliveryMode: String = "embed",
     val isPlaylistSheetOpen: Boolean = false
 )
 
@@ -64,11 +81,69 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val historyTasks: StateFlow<List<DownloadTask>> = repository.historyTasksFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    private val _historySearchQuery = MutableStateFlow("")
+    val historySearchQuery: StateFlow<String> = _historySearchQuery.asStateFlow()
+
+    private val _historyFilter = MutableStateFlow(HistoryFilter.ALL)
+    val historyFilter: StateFlow<HistoryFilter> = _historyFilter.asStateFlow()
+
+    val filteredHistoryTasks: StateFlow<List<DownloadTask>> = combine(
+        repository.historyTasksFlow,
+        _historySearchQuery,
+        _historyFilter
+    ) { tasks, query, filter ->
+        tasks.filter { task ->
+            val matchesFilter = when (filter) {
+                HistoryFilter.ALL -> true
+                HistoryFilter.VIDEO -> !task.isAudioOnly
+                HistoryFilter.AUDIO -> task.isAudioOnly
+                HistoryFilter.FAILED -> task.status == DownloadStatus.FAILED
+            }
+            val matchesQuery = if (query.isBlank()) {
+                true
+            } else {
+                task.title.contains(query, ignoreCase = true) ||
+                    task.uploader.contains(query, ignoreCase = true)
+            }
+            matchesFilter && matchesQuery
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun setHistorySearchQuery(query: String) {
+        _historySearchQuery.value = query
+    }
+
+    fun setHistoryFilter(filter: HistoryFilter) {
+        _historyFilter.value = filter
+    }
+
     val maxConcurrentDownloads: StateFlow<Int> = appPreferences.maxConcurrentDownloads
     val useCookies: StateFlow<Boolean> = appPreferences.useCookies
     val useCustomStorage: StateFlow<Boolean> = appPreferences.useCustomStorage
     val customStorageUri: StateFlow<String?> = appPreferences.customStorageUri
     val organizeByCreator: StateFlow<Boolean> = appPreferences.organizeByCreator
+    val downloadOnlyOnWifi: StateFlow<Boolean> = appPreferences.downloadOnlyOnWifi
+    val downloadSpeedLimitBytes: StateFlow<Long> = appPreferences.downloadSpeedLimitBytes
+    val defaultSubtitleDeliveryMode: StateFlow<String> = appPreferences.defaultSubtitleDeliveryMode
+    val defaultSubtitleFormat: StateFlow<String> = appPreferences.defaultSubtitleFormat
+    val includeAutoCaptions: StateFlow<Boolean> = appPreferences.includeAutoCaptions
+    val preferredSubtitleLangs: StateFlow<Set<String>> = appPreferences.preferredSubtitleLangs
+
+    fun setDefaultSubtitleDeliveryMode(mode: String) = appPreferences.setDefaultSubtitleDeliveryMode(mode)
+    fun setDefaultSubtitleFormat(format: String) = appPreferences.setDefaultSubtitleFormat(format)
+    fun setIncludeAutoCaptions(enabled: Boolean) = appPreferences.setIncludeAutoCaptions(enabled)
+    fun setPreferredSubtitleLangs(langs: Set<String>) = appPreferences.setPreferredSubtitleLangs(langs)
+
+    private val connectivityManager = application.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    private val _isWifiConnected = MutableStateFlow(checkWifiConnected())
+    val isWifiConnected: StateFlow<Boolean> = _isWifiConnected.asStateFlow()
+
+    private fun checkWifiConnected(): Boolean {
+        val net = connectivityManager.activeNetwork ?: return false
+        val caps = connectivityManager.getNetworkCapabilities(net) ?: return false
+        return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+    }
 
     private val _cookieSummary = MutableStateFlow<CookieSummary?>(cookieManager.getCookieSummary())
     val cookieSummary: StateFlow<CookieSummary?> = _cookieSummary.asStateFlow()
@@ -82,9 +157,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _updateMessage = MutableStateFlow<String?>(null)
     val updateMessage: StateFlow<String?> = _updateMessage.asStateFlow()
 
+    private val _cacheSizeBytes = MutableStateFlow(0L)
+    val cacheSizeBytes: StateFlow<Long> = _cacheSizeBytes.asStateFlow()
+
     init {
         loadVersion()
         syncCookiesToEngine()
+        registerNetworkCallback()
+        viewModelScope.launch(Dispatchers.IO) {
+            pruneOrphanedTempDirs()
+            refreshCacheSize()
+        }
+    }
+
+    private fun registerNetworkCallback() {
+        val req = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        try {
+            connectivityManager.registerNetworkCallback(req, object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    _isWifiConnected.value = checkWifiConnected()
+                }
+
+                override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                    _isWifiConnected.value = checkWifiConnected()
+                }
+
+                override fun onLost(network: Network) {
+                    _isWifiConnected.value = checkWifiConnected()
+                }
+            })
+        } catch (_: Exception) {}
     }
 
     private fun syncCookiesToEngine() {
@@ -131,23 +235,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 when (probeData) {
                     is ProbeData.Single -> {
                         val probe = probeData.probe
-                        val defaultFormat = probe.formats.firstOrNull { it.id == "b" }
+                        val defaultFormat = probe.formats.firstOrNull { it.id == "bestvideo*+bestaudio/best" }
+                            ?: probe.formats.firstOrNull { !it.isAudioOnly }
                             ?: probe.formats.firstOrNull()
+
+                        val preferred = appPreferences.getPreferredSubtitleLangs()
+                        val available = probe.subtitleTracks.map { it.code }
+                        val matchingLangs = preferred.filter { it in available }.toSet().ifEmpty {
+                            available.take(1).toSet().ifEmpty { setOf("en") }
+                        }
+                        val defaultDelivery = appPreferences.getDefaultSubtitleDeliveryMode()
+                        val defaultSubFormat = appPreferences.getDefaultSubtitleFormat()
 
                         _homeState.value = _homeState.value.copy(
                             probeState = ProbeUiState.Success(probe),
                             selectedFormat = defaultFormat,
+                            selectedSubtitleLangs = matchingLangs,
+                            subtitleDeliveryMode = defaultDelivery,
+                            subtitleFormat = defaultSubFormat,
                             isPlaylistSheetOpen = false
                         )
                     }
                     is ProbeData.Playlist -> {
                         val playlist = probeData.playlist
                         val allIds = playlist.entries.map { it.id }.toSet()
+                        val preferred = appPreferences.getPreferredSubtitleLangs()
+                        val defaultDelivery = appPreferences.getDefaultSubtitleDeliveryMode()
                         _homeState.value = _homeState.value.copy(
                             probeState = ProbeUiState.Playlist(playlist),
                             selectedPlaylistItems = allIds,
                             selectedBatchPreset = DEFAULT_BATCH_PRESETS[0],
                             embedBatchSubtitles = false,
+                            batchSubtitleLangs = preferred,
+                            batchSubtitleDeliveryMode = defaultDelivery,
                             isPlaylistSheetOpen = true
                         )
                     }
@@ -205,6 +325,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _homeState.value = _homeState.value.copy(embedBatchSubtitles = enabled)
     }
 
+    fun setBatchSubtitleDeliveryMode(mode: String) {
+        _homeState.value = _homeState.value.copy(batchSubtitleDeliveryMode = mode)
+    }
+
     fun startBatchDownload(onEnqueued: () -> Unit) {
         val currentState = _homeState.value
         val playlist = (currentState.probeState as? ProbeUiState.Playlist)?.playlist ?: return
@@ -230,7 +354,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     isAudioOnly = preset.isAudioOnly,
                     audioCodec = preset.audioCodec,
                     embedSubtitles = if (!preset.isAudioOnly) currentState.embedBatchSubtitles else false,
-                    subtitleLang = if (!preset.isAudioOnly && currentState.embedBatchSubtitles) "en" else null,
+                    subtitleLang = if (!preset.isAudioOnly && currentState.embedBatchSubtitles) currentState.batchSubtitleLangs.joinToString(",") else null,
+                    subtitleDeliveryMode = currentState.batchSubtitleDeliveryMode,
+                    subtitleFormat = currentState.subtitleFormat,
                     status = DownloadStatus.QUEUED
                 )
             }
@@ -251,8 +377,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _homeState.value = _homeState.value.copy(embedSubtitles = enabled)
     }
 
-    fun selectSubtitleLang(lang: String) {
-        _homeState.value = _homeState.value.copy(selectedSubtitleLang = lang)
+    fun openSubtitleSheet() {
+        _homeState.value = _homeState.value.copy(isSubtitleSheetOpen = true)
+    }
+
+    fun dismissSubtitleSheet() {
+        _homeState.value = _homeState.value.copy(isSubtitleSheetOpen = false)
+    }
+
+    fun toggleSubtitleLanguage(langCode: String) {
+        val current = _homeState.value.selectedSubtitleLangs.toMutableSet()
+        if (current.contains(langCode)) {
+            current.remove(langCode)
+        } else {
+            current.add(langCode)
+        }
+        _homeState.value = _homeState.value.copy(selectedSubtitleLangs = current)
+    }
+
+    fun selectAllSubtitleLanguages(langs: List<String>) {
+        _homeState.value = _homeState.value.copy(selectedSubtitleLangs = langs.toSet())
+    }
+
+    fun clearAllSubtitleLanguages() {
+        _homeState.value = _homeState.value.copy(selectedSubtitleLangs = emptySet())
+    }
+
+    fun setSubtitleDeliveryMode(mode: String) {
+        _homeState.value = _homeState.value.copy(subtitleDeliveryMode = mode)
+    }
+
+    fun setSubtitleFormat(format: String) {
+        _homeState.value = _homeState.value.copy(subtitleFormat = format)
     }
 
     fun startDownload(onEnqueued: () -> Unit) {
@@ -274,7 +430,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 isAudioOnly = format.isAudioOnly,
                 audioCodec = format.audioCodec,
                 embedSubtitles = if (!format.isAudioOnly) currentState.embedSubtitles else false,
-                subtitleLang = if (!format.isAudioOnly && currentState.embedSubtitles) currentState.selectedSubtitleLang else null,
+                subtitleLang = if (!format.isAudioOnly && currentState.embedSubtitles) currentState.selectedSubtitleLangs.joinToString(",") else null,
+                subtitleDeliveryMode = currentState.subtitleDeliveryMode,
+                subtitleFormat = currentState.subtitleFormat,
                 status = DownloadStatus.QUEUED
             )
 
@@ -319,9 +477,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         appPreferences.setMaxConcurrentDownloads(limit)
     }
 
-    fun deleteTask(taskId: String) {
+    fun deleteTask(taskId: String, deleteFiles: Boolean = false) {
         viewModelScope.launch {
-            repository.deleteTask(taskId)
+            repository.deleteTask(taskId, deleteFiles)
+        }
+    }
+
+    fun deleteTasks(taskIds: Collection<String>, deleteFiles: Boolean = false) {
+        viewModelScope.launch {
+            repository.deleteTasks(taskIds, deleteFiles)
         }
     }
 
@@ -402,6 +566,84 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setOrganizeByCreator(enabled: Boolean) {
         appPreferences.setOrganizeByCreator(enabled)
+    }
+
+    fun setDownloadOnlyOnWifi(enabled: Boolean) {
+        appPreferences.setDownloadOnlyOnWifi(enabled)
+    }
+
+    fun setDownloadSpeedLimitBytes(bytes: Long) {
+        appPreferences.setDownloadSpeedLimitBytes(bytes)
+    }
+
+    fun refreshCacheSize() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _cacheSizeBytes.value = calculateDirectorySize(getApplication<Application>().cacheDir)
+        }
+    }
+
+    fun clearAppCache(onCleared: () -> Unit = {}) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val app = getApplication<Application>()
+            val cacheRoot = app.cacheDir
+            val activeIds = repository.tasksFlow.value
+                .filter {
+                    it.status == DownloadStatus.QUEUED ||
+                    it.status == DownloadStatus.DOWNLOADING ||
+                    it.status == DownloadStatus.PROCESSING ||
+                    it.status == DownloadStatus.PAUSED
+                }
+                .map { it.id }
+                .toSet()
+
+            cacheRoot.listFiles()?.forEach { file ->
+                if (file.name == "downloads") {
+                    file.listFiles()?.forEach { taskDir ->
+                        if (taskDir.name !in activeIds) {
+                            taskDir.deleteRecursively()
+                        }
+                    }
+                } else {
+                    file.deleteRecursively()
+                }
+            }
+            _cacheSizeBytes.value = calculateDirectorySize(cacheRoot)
+            launch(Dispatchers.Main) {
+                onCleared()
+            }
+        }
+    }
+
+    private fun pruneOrphanedTempDirs() {
+        val app = getApplication<Application>()
+        val downloadsDir = File(app.cacheDir, "downloads")
+        if (!downloadsDir.exists() || !downloadsDir.isDirectory) return
+
+        val activeIds = repository.tasksFlow.value
+            .filter {
+                it.status == DownloadStatus.QUEUED ||
+                it.status == DownloadStatus.DOWNLOADING ||
+                it.status == DownloadStatus.PROCESSING ||
+                it.status == DownloadStatus.PAUSED
+            }
+            .map { it.id }
+            .toSet()
+
+        downloadsDir.listFiles()?.forEach { taskDir ->
+            if (taskDir.isDirectory && taskDir.name !in activeIds) {
+                taskDir.deleteRecursively()
+            }
+        }
+    }
+
+    private fun calculateDirectorySize(dir: File?): Long {
+        if (dir == null || !dir.exists()) return 0L
+        if (dir.isFile) return dir.length()
+        var size = 0L
+        dir.listFiles()?.forEach { child ->
+            size += if (child.isDirectory) calculateDirectorySize(child) else child.length()
+        }
+        return size
     }
 
     private fun extractUrl(text: String): String? {
